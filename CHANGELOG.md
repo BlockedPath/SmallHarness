@@ -8,7 +8,14 @@ fix releases.
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Multi-file operations with `/batch` and `/refactor` commands for cross-file reference finding and coordinated edits
+- Test integration with `/test` command for test discovery, execution, and smart selection based on changed files
+- Prompt library with `/prompt` command for saving, listing, running, and managing prompt templates
+- Built-in prompt library with templates for code review, debug, refactor, document, explain, and test tasks
+- Test status integration in `/shipcheck` with `--tests` flag to run tests during preflight checks
+- Prompt import/export functionality for sharing prompt libraries across projects
 
 ## [0.2.2] - 2026-05-03
 

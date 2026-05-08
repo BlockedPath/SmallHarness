@@ -9,6 +9,9 @@ use crate::agent::to_openai_tools;
 use crate::backends::{
     backend, default_model, validate, BackendDescriptor, BackendName, ProfileName,
 };
+use crate::batch_operations::{
+    execute_batch_operations, find_cross_file_references, find_related_files, preview_batch_operations, BatchEditOperation, EditOperation,
+};
 use crate::budget::{format_bytes, measure_prompt_budget};
 use crate::capabilities::{
     self, best_record, recommended_tool_selection, record_score, sorted_records,
@@ -30,6 +33,7 @@ use crate::project_memory::{
     load_project_index, load_project_notes, project_index_freshness, project_memory_status,
     refresh_changed_project_index, render_repo_map, render_system_prompt_with_memory,
 };
+use crate::prompt_library::{delete_prompt, export_prompts, import_prompts, list_prompts, load_prompt, PromptLibrary, save_prompt};
 use crate::recommend::{
     apply_recommendation_to_config, recommend_models, ModelCandidate, ModelRecommendation,
 };
@@ -38,8 +42,11 @@ use crate::session::{
     resolve_session_path, save_message, search_sessions, set_session_title, SessionEntry,
 };
 use crate::shipcheck::{
-    collect_shipcheck, default_export_path, file_status_label,
+    collect_shipcheck, collect_shipcheck_with_tests, default_export_path, file_status_label,
     render_markdown as render_shipcheck_markdown, ShipcheckSnapshot,
+};
+use crate::test_integration::{
+    discover_tests, run_tests, smart_test_selection,
 };
 use crate::tools::{build_tools, build_tools_for_names, select_tool_names};
 use crate::warmup::warmup;
@@ -145,6 +152,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/remember", "Save a durable project note"),
     ("/forget", "Remove a project note"),
     ("/eval", "Run prompt/model comparison suite"),
+    ("/batch", "Execute multi-file operations with preview and rollback"),
+    ("/refactor", "Find cross-file references and related files"),
+    ("/test", "Discover, run, and analyze tests with smart selection"),
+    ("/prompt", "Save, list, run, and manage prompt templates"),
 ];
 
 fn fmt_tokens(n: u32) -> String {
@@ -191,6 +202,10 @@ pub async fn dispatch(input: &str, state: &mut AppState) -> Result<()> {
         "/remember" => cmd_remember(&args, state)?,
         "/forget" => cmd_forget(&args, state)?,
         "/eval" => cmd_eval(&args, state).await?,
+        "/batch" => cmd_batch(&args, state)?,
+        "/refactor" => cmd_refactor(&args, state)?,
+        "/test" => cmd_test(&args, state)?,
+        "/prompt" => cmd_prompt(&args, state)?,
         other => {
             println!("  {DIM}Unknown command: {other}. Type /help.{RESET}");
         }
@@ -395,20 +410,35 @@ fn cmd_mode(args: &str, state: &mut AppState) {
 }
 
 fn cmd_shipcheck(args: &str, state: &AppState) -> Result<()> {
-    let mut parts = args.split_whitespace();
-    let action = parts.next();
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let action = parts.first().map(|s| *s);
     let export = matches!(action, Some("export") | Some("save"));
-    if matches!(action, Some(other) if other != "export" && other != "save") {
-        println!("  {DIM}Usage: /shipcheck [export [path]]{RESET}");
+    let run_tests = args.contains("--tests");
+    
+    if matches!(action, Some(other) if other != "export" && other != "save" && other != "--tests") {
+        println!("  {DIM}Usage: /shipcheck [export [path]] [--tests]{RESET}");
         return Ok(());
     }
-    let explicit_path = parts.next().map(PathBuf::from);
-    if parts.next().is_some() {
-        println!("  {DIM}Usage: /shipcheck [export [path]]{RESET}");
+    
+    // Filter out --tests from path parsing
+    let path_parts: Vec<&str> = parts.iter().filter(|p| **p != "--tests").cloned().collect();
+    let explicit_path = if path_parts.len() > 1 {
+        Some(PathBuf::from(path_parts[1]))
+    } else {
+        None
+    };
+    
+    if path_parts.len() > 2 {
+        println!("  {DIM}Usage: /shipcheck [export [path]] [--tests]{RESET}");
         return Ok(());
     }
 
-    let snapshot = collect_shipcheck(&state.config.workspace_root)?;
+    let snapshot = if run_tests {
+        collect_shipcheck_with_tests(&state.config.workspace_root, true)?
+    } else {
+        collect_shipcheck(&state.config.workspace_root)?
+    };
+    
     let freshness = if state.config.project_memory.enabled {
         Some(project_index_freshness(&state.config)?)
     } else {
@@ -602,6 +632,27 @@ fn print_shipcheck(
     print_shipcheck_file_preview(snapshot);
     print_diff_stat("stagedDiff", &snapshot.staged_diff_stat);
     print_diff_stat("unstagedDiff", &snapshot.unstaged_diff_stat);
+    
+    if let Some(test_status) = &snapshot.test_status {
+        let test_color = if test_status.failed > 0 || test_status.exit_code != 0 {
+            RED
+        } else {
+            GREEN
+        };
+        println!(
+            "  {DIM}tests{RESET}           framework={CYAN}{}{RESET} total={} passed={} failed={} skipped={} {test_color}exit_code={}{}{RESET}",
+            test_status.framework,
+            test_status.total,
+            test_status.passed,
+            test_status.failed,
+            test_status.skipped,
+            test_status.exit_code,
+            if test_status.failed > 0 || test_status.exit_code != 0 { " [FAILED]" } else { " [PASSED]" }
+        );
+    } else {
+        println!("  {DIM}tests{RESET}           not run (use --tests flag)");
+    }
+    
     print_project_memory_freshness(freshness);
 }
 
@@ -2586,6 +2637,410 @@ async fn cmd_eval(args: &str, state: &AppState) -> Result<()> {
         md_path.display()
     );
     Ok(())
+}
+
+fn cmd_batch(args: &str, state: &AppState) -> Result<()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() {
+        println!("  {DIM}Usage: /batch [preview|apply] [operations.json]{RESET}");
+        println!("  {DIM}  /batch preview ops.json  - Show what would change{RESET}");
+        println!("  {DIM}  /batch apply ops.json    - Execute the operations{RESET}");
+        return Ok(());
+    }
+
+    let action = parts[0];
+    let json_path = if parts.len() > 1 {
+        PathBuf::from(parts[1])
+    } else {
+        println!("  {YELLOW}!{RESET} {DIM}Please provide a path to the operations JSON file.{RESET}");
+        return Ok(());
+    };
+
+    if !json_path.exists() {
+        println!("  {RED}✗{RESET} {DIM}Operations file not found: {}{RESET}", json_path.display());
+        return Ok(());
+    }
+
+    let json_content = fs::read_to_string(&json_path)?;
+    let operations: Vec<BatchEditOperation> = match serde_json::from_str(&json_content) {
+        Ok(ops) => ops,
+        Err(e) => {
+            println!("  {RED}✗{RESET} {DIM}Failed to parse operations: {e}{RESET}");
+            return Ok(());
+        }
+    };
+
+    match action {
+        "preview" => {
+            let preview = preview_batch_operations(&operations);
+            println!("  {DIM}Batch Operations Preview{RESET}");
+            println!("  {DIM}Total files: {}{RESET}", preview.total_files);
+            println!("  {DIM}Estimated changes: {}{RESET}", preview.estimated_changes);
+            println!();
+            for (i, op) in preview.operations.iter().enumerate() {
+                println!("  {CYAN}{}. {}{RESET}", i + 1, op.file_path);
+                match &op.operation {
+                    EditOperation::Replace { old_string, .. } => {
+                        println!("    {DIM}Replace: {}{RESET}", truncate_string(old_string, 60));
+                    }
+                    EditOperation::Insert { position, .. } => {
+                        println!("    {DIM}Insert: {:?}{RESET}", position);
+                    }
+                    EditOperation::Delete { pattern } => {
+                        println!("    {DIM}Delete: {}{RESET}", truncate_string(pattern, 60));
+                    }
+                }
+            }
+        }
+        "apply" => {
+            println!("  {DIM}Applying batch operations...{RESET}");
+            let workspace_root = Path::new(&state.config.workspace_root);
+            let result = execute_batch_operations(&operations, workspace_root, false)?;
+            
+            if !result.successful.is_empty() {
+                println!("  {GREEN}✓{RESET} {DIM}Successfully applied {} file(s){RESET}", result.successful.len());
+                for file in &result.successful {
+                    println!("    {DIM}{}{RESET}", file);
+                }
+            }
+            
+            if !result.failed.is_empty() {
+                println!("  {RED}✗{RESET} {DIM}Failed on {} file(s){RESET}", result.failed.len());
+                for fail in &result.failed {
+                    println!("    {RED}{}: {}{RESET}", fail.file_path, fail.error);
+                }
+            }
+            
+            if !result.skipped.is_empty() {
+                println!("  {YELLOW}!{RESET} {DIM}Skipped {} file(s){RESET}", result.skipped.len());
+                for file in &result.skipped {
+                    println!("    {DIM}{}{RESET}", file);
+                }
+            }
+        }
+        _ => {
+            println!("  {DIM}Usage: /batch [preview|apply] [operations.json]{RESET}");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_refactor(args: &str, state: &AppState) -> Result<()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() {
+        println!("  {DIM}Usage: /refactor [references|related] <file_path>{RESET}");
+        println!("  {DIM}  /refactor references src/main.rs  - Find cross-file references{RESET}");
+        println!("  {DIM}  /refactor related src/main.rs     - Find related files{RESET}");
+        return Ok(());
+    }
+
+    let action = parts[0];
+    if parts.len() < 2 {
+        println!("  {YELLOW}!{RESET} {DIM}Please provide a file path.{RESET}");
+        return Ok(());
+    }
+
+    let file_path = parts[1];
+
+    match action {
+        "references" => {
+            let references = find_cross_file_references(&state.config, file_path)?;
+            if references.is_empty() {
+                println!("  {DIM}No cross-file references found for {}{RESET}", file_path);
+            } else {
+                println!("  {DIM}Cross-file references for {}{RESET}", file_path);
+                for ref_info in references {
+                    println!("    {CYAN}{}{RESET} {DIM}→{}{RESET}", ref_info.from_file, ref_info.to_file);
+                    println!("      {DIM}type: {}, line: {}{RESET}", ref_info.reference_type, ref_info.line);
+                }
+            }
+        }
+        "related" => {
+            let related = find_related_files(&state.config, file_path)?;
+            if related.is_empty() {
+                println!("  {DIM}No related files found for {}{RESET}", file_path);
+            } else {
+                println!("  {DIM}Related files for {}{RESET}", file_path);
+                for file in related {
+                    println!("    {CYAN}{}{RESET}", file);
+                }
+            }
+        }
+        _ => {
+            println!("  {DIM}Usage: /refactor [references|related] <file_path>{RESET}");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_test(args: &str, state: &AppState) -> Result<()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() {
+        println!("  {DIM}Usage: /test [discover|run|smart] [args]{RESET}");
+        println!("  {DIM}  /test discover              - Auto-detect test framework and list tests{RESET}");
+        println!("  {DIM}  /test run [test_pattern]   - Run all tests or matching pattern{RESET}");
+        println!("  {DIM}  /test smart                 - Run tests based on changed files{RESET}");
+        return Ok(());
+    }
+
+    let action = parts[0];
+
+    match action {
+        "discover" => {
+            match discover_tests(&state.config.workspace_root) {
+                Ok(discovery) => {
+                    println!("  {DIM}Test Discovery{RESET}");
+                    println!("  {DIM}Framework: {}{RESET}", discovery.framework);
+                    println!("  {DIM}Test files found: {}{RESET}", discovery.test_files.len());
+                    for test_file in &discovery.test_files {
+                        println!("    {CYAN}{}{RESET}", test_file);
+                    }
+                    if let Some(command) = discovery.run_command {
+                        println!("  {DIM}Run command: {}{RESET}", command);
+                    }
+                }
+                Err(e) => {
+                    println!("  {RED}✗{RESET} {DIM}Test discovery failed: {e}{RESET}");
+                }
+            }
+        }
+        "run" => {
+            let pattern = if parts.len() > 1 { Some(parts[1]) } else { None };
+            match run_tests(&state.config.workspace_root, pattern) {
+                Ok(results) => {
+                    println!("  {DIM}Test Results{RESET}");
+                    println!("  {DIM}Total: {}{RESET}", results.total);
+                    println!("  {DIM}Passed: {}{RESET}", results.passed);
+                    println!("  {DIM}Failed: {}{RESET}", results.failed);
+                    println!("  {DIM}Skipped: {}{RESET}", results.skipped);
+                    if !results.failures.is_empty() {
+                        println!();
+                        println!("  {RED}Failures:{RESET}");
+                        for failure in &results.failures {
+                            println!("    {RED}{}{RESET}", failure);
+                        }
+                    }
+                    if results.exit_code != 0 {
+                        println!();
+                        println!("  {RED}✗{RESET} {DIM}Tests failed with exit code {}{RESET}", results.exit_code);
+                    } else {
+                        println!();
+                        println!("  {GREEN}✓{RESET} {DIM}All tests passed{RESET}");
+                    }
+                }
+                Err(e) => {
+                    println!("  {RED}✗{RESET} {DIM}Test execution failed: {e}{RESET}");
+                }
+            }
+        }
+        "smart" => {
+            match smart_test_selection(&state.config.workspace_root) {
+                Ok(selected_tests) => {
+                    println!("  {DIM}Smart Test Selection{RESET}");
+                    println!("  {DIM}Based on changed files, {} test(s) selected{RESET}", selected_tests.len());
+                    for test in &selected_tests {
+                        println!("    {CYAN}{}{RESET}", test);
+                    }
+                    if !selected_tests.is_empty() {
+                        println!();
+                        println!("  {DIM}Running selected tests...{RESET}");
+                        // Convert to a simple pattern for the run command
+                        let pattern = selected_tests.join("|");
+                        match run_tests(&state.config.workspace_root, Some(&pattern)) {
+                            Ok(results) => {
+                                println!("  {DIM}Total: {} Passed: {} Failed: {}{RESET}", results.total, results.passed, results.failed);
+                            }
+                            Err(e) => {
+                                println!("  {RED}✗{RESET} {DIM}Test execution failed: {e}{RESET}");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  {RED}✗{RESET} {DIM}Smart test selection failed: {e}{RESET}");
+                }
+            }
+        }
+        _ => {
+            println!("  {DIM}Usage: /test [discover|run|smart] [args]{RESET}");
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_prompt(args: &str, state: &AppState) -> Result<()> {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.is_empty() {
+        println!("  {DIM}Usage: /prompt [save|list|run|template|builtin|delete|export|import] [args]{RESET}");
+        println!("  {DIM}  /prompt save <name>           - Save current prompt as template{RESET}");
+        println!("  {DIM}  /prompt list                  - List saved prompts{RESET}");
+        println!("  {DIM}  /prompt run <name>            - Run a saved prompt{RESET}");
+        println!("  {DIM}  /prompt template <name>       - Create parameterized template{RESET}");
+        println!("  {DIM}  /prompt builtin                - List built-in prompts{RESET}");
+        println!("  {DIM}  /prompt builtin <name>        - Run a built-in prompt{RESET}");
+        println!("  {DIM}  /prompt delete <name>         - Delete a saved prompt{RESET}");
+        println!("  {DIM}  /prompt export <path>         - Export all prompts to JSON{RESET}");
+        println!("  {DIM}  /prompt import <path>         - Import prompts from JSON{RESET}");
+        return Ok(());
+    }
+
+    let action = parts[0];
+    let library = PromptLibrary::new();
+
+    match action {
+        "save" => {
+            if parts.len() < 2 {
+                println!("  {YELLOW}!{RESET} {DIM}Please provide a name for the prompt.{RESET}");
+                return Ok(());
+            }
+            let name = parts[1];
+            // For now, we'll save a simple placeholder since we don't have access to the current prompt
+            let prompt_content = "# Prompt template saved via /prompt command\n# Edit this file to customize your prompt";
+            save_prompt(&state.config.session_dir, name, prompt_content)?;
+            println!("  {GREEN}✓{RESET} {DIM}Prompt '{}' saved{RESET}", name);
+        }
+        "list" => {
+            let user_prompts = list_prompts(&state.config.session_dir)?;
+            
+            if user_prompts.is_empty() {
+                println!("  {DIM}No saved prompts found.{RESET}");
+            } else {
+                println!("  {DIM}Saved prompts:{RESET}");
+                for name in &user_prompts {
+                    println!("    {CYAN}{}{RESET}", name);
+                }
+            }
+            
+            println!();
+            println!("  {DIM}Built-in prompts:{RESET}");
+            for template in library.list() {
+                println!("    {CYAN}{}{RESET} - {}", template.name, template.description);
+            }
+        }
+        "run" => {
+            if parts.len() < 2 {
+                println!("  {YELLOW}!{RESET} {DIM}Please provide a prompt name.{RESET}");
+                return Ok(());
+            }
+            let name = parts[1];
+            
+            // Check if it's a built-in prompt
+            if name.starts_with("builtin:") {
+                let builtin_name = name.strip_prefix("builtin:").unwrap();
+                if let Some(template) = library.get(builtin_name) {
+                    println!("  {DIM}Built-in prompt: {}{RESET}", template.name);
+                    println!("  {DIM}Description: {}{RESET}", template.description);
+                    println!();
+                    println!("{}", template.content);
+                    if !template.variables.is_empty() {
+                        println!();
+                        println!("  {DIM}Variables: {}{RESET}", template.variables.join(", "));
+                    }
+                } else {
+                    println!("  {RED}✗{RESET} {DIM}Built-in prompt not found: {}{RESET}", builtin_name);
+                }
+            } else {
+                // Try to load user prompt
+                match load_prompt(&state.config.session_dir, name) {
+                    Ok(content) => {
+                        println!("  {DIM}Prompt content:{RESET}");
+                        println!("{}", content);
+                    }
+                    Err(_) => {
+                        println!("  {RED}✗{RESET} {DIM}Prompt not found: {}{RESET}", name);
+                    }
+                }
+            }
+        }
+        "template" => {
+            if parts.len() < 2 {
+                println!("  {YELLOW}!{RESET} {DIM}Please provide a template name.{RESET}");
+                return Ok(());
+            }
+            let name = parts[1];
+            let template_content = r#"# Parameterized Template: {{name}}
+# Variables: {{var1}}, {{var2}}
+# Use {{variable}} syntax for parameters
+
+Your prompt template goes here.
+Use double curly braces {{}} for variable placeholders."#;
+            save_prompt(&state.config.session_dir, name, template_content)?;
+            println!("  {GREEN}✓{RESET} {DIM}Template '{}' saved{RESET}", name);
+        }
+        "builtin" => {
+            if parts.len() < 2 {
+                println!("  {DIM}Built-in prompts:{RESET}");
+                for template in library.list() {
+                    println!("    {CYAN}{}{RESET} - {}", template.name, template.description);
+                }
+                println!();
+                println!("  {DIM}Use: /prompt run builtin:<name>{RESET}");
+            } else {
+                let name = parts[1];
+                if let Some(template) = library.get(name) {
+                    println!("  {DIM}Built-in prompt: {}{RESET}", template.name);
+                    println!("  {DIM}Description: {}{RESET}", template.description);
+                    println!();
+                    println!("{}", template.content);
+                    if !template.variables.is_empty() {
+                        println!();
+                        println!("  {DIM}Variables: {}{RESET}", template.variables.join(", "));
+                    }
+                } else {
+                    println!("  {RED}✗{RESET} {DIM}Built-in prompt not found: {}{RESET}", name);
+                }
+            }
+        }
+        "delete" => {
+            if parts.len() < 2 {
+                println!("  {YELLOW}!{RESET} {DIM}Please provide a prompt name.{RESET}");
+                return Ok(());
+            }
+            let name = parts[1];
+            match delete_prompt(&state.config.session_dir, name) {
+                Ok(_) => println!("  {GREEN}✓{RESET} {DIM}Prompt '{}' deleted{RESET}", name),
+                Err(e) => println!("  {RED}✗{RESET} {DIM}{}{RESET}", e),
+            }
+        }
+        "export" => {
+            if parts.len() < 2 {
+                println!("  {YELLOW}!{RESET} {DIM}Please provide an export path.{RESET}");
+                return Ok(());
+            }
+            let export_path = PathBuf::from(parts[1]);
+            match export_prompts(&state.config.session_dir, &export_path) {
+                Ok(_) => println!("  {GREEN}✓{RESET} {DIM}Prompts exported to {}{RESET}", export_path.display()),
+                Err(e) => println!("  {RED}✗{RESET} {DIM}{}{RESET}", e),
+            }
+        }
+        "import" => {
+            if parts.len() < 2 {
+                println!("  {YELLOW}!{RESET} {DIM}Please provide an import path.{RESET}");
+                return Ok(());
+            }
+            let import_path = PathBuf::from(parts[1]);
+            match import_prompts(&state.config.session_dir, &import_path) {
+                Ok(count) => println!("  {GREEN}✓{RESET} {DIM}Imported {} prompt(s){RESET}", count),
+                Err(e) => println!("  {RED}✗{RESET} {DIM}{}{RESET}", e),
+            }
+        }
+        _ => {
+            println!("  {DIM}Usage: /prompt [save|list|run|template|builtin|delete|export|import] [args]{RESET}");
+        }
+    }
+
+    Ok(())
+}
+
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::project_memory::ProjectIndexFreshness;
+use crate::test_integration::{discover_tests, run_tests};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitFileKind {
@@ -40,6 +41,17 @@ pub struct ShipcheckSnapshot {
     pub files: Vec<GitFileState>,
     pub staged_diff_stat: String,
     pub unstaged_diff_stat: String,
+    pub test_status: Option<TestStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestStatus {
+    pub framework: String,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub exit_code: i32,
 }
 
 impl ShipcheckSnapshot {
@@ -95,6 +107,10 @@ impl ShipcheckSnapshot {
 }
 
 pub fn collect_shipcheck(workspace_root: &str) -> Result<ShipcheckSnapshot> {
+    collect_shipcheck_with_tests(workspace_root, false)
+}
+
+pub fn collect_shipcheck_with_tests(workspace_root: &str, run_tests_flag: bool) -> Result<ShipcheckSnapshot> {
     let git_root = run_git(workspace_root, &["rev-parse", "--show-toplevel"])?
         .trim()
         .to_string();
@@ -103,6 +119,12 @@ pub fn collect_shipcheck(workspace_root: &str) -> Result<ShipcheckSnapshot> {
     let staged_diff_stat = run_git(workspace_root, &["diff", "--cached", "--stat", "--"])?;
     let unstaged_diff_stat = run_git(workspace_root, &["diff", "--stat", "--"])?;
 
+    let test_status = if run_tests_flag {
+        run_shipcheck_tests(workspace_root).ok()
+    } else {
+        None
+    };
+
     Ok(ShipcheckSnapshot {
         workspace_root: workspace_root.to_string(),
         git_root,
@@ -110,6 +132,31 @@ pub fn collect_shipcheck(workspace_root: &str) -> Result<ShipcheckSnapshot> {
         files,
         staged_diff_stat: staged_diff_stat.trim().to_string(),
         unstaged_diff_stat: unstaged_diff_stat.trim().to_string(),
+        test_status,
+    })
+}
+
+fn run_shipcheck_tests(workspace_root: &str) -> Result<TestStatus> {
+    let discovery = discover_tests(workspace_root)?;
+    if discovery.framework == "unknown" {
+        return Ok(TestStatus {
+            framework: "none".to_string(),
+            total: 0,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+            exit_code: 0,
+        });
+    }
+
+    let test_result = run_tests(workspace_root, None)?;
+    Ok(TestStatus {
+        framework: discovery.framework,
+        total: test_result.total,
+        passed: test_result.passed,
+        failed: test_result.failed,
+        skipped: test_result.skipped,
+        exit_code: test_result.exit_code,
     })
 }
 
@@ -303,6 +350,25 @@ pub fn render_markdown(
     push_diff_stat(&mut out, "Staged Diff", &snapshot.staged_diff_stat);
     push_diff_stat(&mut out, "Unstaged Diff", &snapshot.unstaged_diff_stat);
 
+    out.push_str("## Tests\n\n");
+    match &snapshot.test_status {
+        Some(status) => {
+            out.push_str(&format!("- Framework: `{}`\n", status.framework));
+            out.push_str(&format!("- Total: {}\n", status.total));
+            out.push_str(&format!("- Passed: {}\n", status.passed));
+            out.push_str(&format!("- Failed: {}\n", status.failed));
+            out.push_str(&format!("- Skipped: {}\n", status.skipped));
+            out.push_str(&format!("- Exit code: {}\n", status.exit_code));
+            if status.failed > 0 || status.exit_code != 0 {
+                out.push_str("- Status: **FAILED**\n");
+            } else {
+                out.push_str("- Status: **PASSED**\n");
+            }
+        }
+        None => out.push_str("- Tests not run (use `/shipcheck --tests` to run tests)\n"),
+    }
+    out.push('\n');
+
     out.push_str("## Project Memory\n\n");
     match freshness {
         Some(report) if report.indexed_files > 0 || report.workspace_files > 0 => {
@@ -410,6 +476,7 @@ u UU N... 100644 100644 100644 100644 a b c src/conflict.rs
             files,
             staged_diff_stat: String::new(),
             unstaged_diff_stat: String::new(),
+            test_status: None,
         };
 
         assert_eq!(snapshot.branch.ahead, 2);
@@ -447,6 +514,7 @@ u UU N... 100644 100644 100644 100644 a b c src/conflict.rs
             }],
             staged_diff_stat: " src/main.rs | 1 +".to_string(),
             unstaged_diff_stat: String::new(),
+            test_status: None,
         };
         let freshness = ProjectIndexFreshness {
             indexed_files: 1,

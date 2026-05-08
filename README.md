@@ -57,6 +57,9 @@ backend so you can start running without picking weights out of a long list.
 | Operator modes | `/mode explore`, `/mode edit`, `/mode ship`, and `/mode review` tune tools, approvals, and step budgets |
 | Ship preflight | `/shipcheck` summarizes branch drift, dirty files, diff stats, and project-memory freshness before release |
 | Ship handoff | `/handoff` drafts a one-line commit message, changelog bullets, testing note, and X-ready post from local git context |
+| Multi-file operations | `/batch` and `/refactor` enable cross-file reference finding and coordinated multi-file edits with preview |
+| Test integration | `/test` discovers, runs, and analyzes tests with smart selection based on changed files |
+| Prompt library | `/prompt` saves, lists, runs, and manages prompt templates with built-in library and import/export |
 | Capability cache | `/doctor --deep` and `/bench` persist per-backend/model capability and latency records under `.sessions/capabilities/` |
 | Autotune | `/autotune` scores cached models and can switch the active session to the best local fit |
 | Configurable tools | File read/write/edit, apply-patch, repo-search, glob, grep, list-dir, shell — pick which to enable to control prompt-eval cost |
@@ -67,7 +70,7 @@ backend so you can start running without picking weights out of a long list.
 | Streaming output | Tokens stream as they arrive, with grouped tool-call display and optional reasoning deltas |
 | Session persistence | JSONL append-only session logs with titles, search, resume, delete, prune, and export commands |
 | One-shot mode | `small-harness --print "prompt"` or piped stdin for scripts and CI |
-| Slash commands | `/setup`, `/mode`, `/shipcheck`, `/handoff`, `/backend`, `/profile`, `/model`, `/tools`, `/index`, `/map`, `/memory`, `/remember`, `/forget`, `/compare`, `/session`, `/sessions`, `/resume`, `/export`, `/doctor`, `/bench`, `/capabilities`, `/autotune`, `/recommend`, `/eval`, `/new`, `/help` |
+| Slash commands | `/setup`, `/mode`, `/shipcheck`, `/handoff`, `/batch`, `/refactor`, `/test`, `/prompt`, `/backend`, `/profile`, `/model`, `/tools`, `/index`, `/map`, `/memory`, `/remember`, `/forget`, `/compare`, `/session`, `/sessions`, `/resume`, `/export`, `/doctor`, `/bench`, `/capabilities`, `/autotune`, `/recommend`, `/eval`, `/new`, `/help` |
 | Bordered TUI | Clean terminal box input with persisted history, arrow recall, and Ctrl-J multi-line prompts |
 
 ## Quick Install
@@ -237,8 +240,12 @@ At each prompt you can choose `[y]es`, `[n]o`, `[a]lways for this tool`, or
 | `/clear` | Clear the screen |
 | `/config` | Show resolved mode, backend, model, workspace, history, display, and context config |
 | `/mode [explore\|edit\|ship\|review\|custom]` | Show or set an operator preset for tools, approvals, and step budget |
-| `/shipcheck [export [path]]` | Summarize git branch drift, dirty files, diff stats, and project-memory freshness; optionally save a Markdown report |
+| `/shipcheck [export [path]] [--tests]` | Summarize git branch drift, dirty files, diff stats, project-memory freshness, and test status; optionally save a Markdown report |
 | `/handoff [export\|save] [path] [--cloud]` | Draft commit, changelog, testing, and X-ready release copy from the current local git context; OpenRouter requires `--cloud` |
+| `/batch [preview\|apply] [operations.json]` | Execute multi-file operations with preview and rollback support |
+| `/refactor [references\|related] <file_path>` | Find cross-file references and related files using project memory |
+| `/test [discover\|run\|smart] [args]` | Discover, run, and analyze tests with smart selection based on changed files |
+| `/prompt [save\|list\|run\|builtin\|delete\|export\|import] [args]` | Save, list, run, and manage prompt templates with built-in library and import/export |
 | `/session [title <text>]` | Show session info or set a friendly session title |
 | `/sessions` | List saved sessions under `.sessions/` |
 | `/sessions search <query>` | Search saved session titles and transcript text |

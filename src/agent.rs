@@ -7,8 +7,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backends::BackendDescriptor;
-use crate::context_guard::{maybe_compact_messages, ContextGuardParams};
 use crate::cancel::CancellationToken;
+use crate::context_guard::{maybe_compact_messages, ContextGuardParams};
 use crate::openai::{
     stream_chat, ChatMessage, ChatRequest, StreamOptions, ToolCall, ToolDef, ToolDefFunction,
     ToolFunction,
@@ -35,6 +35,7 @@ pub enum AgentEvent {
     },
     ContextCompacted {
         notice: String,
+        conversation_summary: Option<String>,
     },
 }
 
@@ -47,6 +48,8 @@ pub struct RunResult {
     pub messages: Vec<ChatMessage>,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub transcript_rewritten: bool,
+    pub conversation_summary: Option<String>,
 }
 
 pub fn to_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<ToolDef> {
@@ -176,6 +179,11 @@ where
 
     let mut total_in: u32 = 0;
     let mut total_out: u32 = 0;
+    let mut transcript_rewritten = false;
+    let mut conversation_summary = guard
+        .as_ref()
+        .map(|(params, _)| params.conversation_summary.clone())
+        .unwrap_or_default();
 
     for step in 0..max_steps {
         if cancel.as_ref().map(|c| c.is_cancelled()).unwrap_or(false) {
@@ -374,7 +382,16 @@ where
             )
             .await?
             {
-                on_event(AgentEvent::ContextCompacted { notice });
+                if notice.transcript_rewritten {
+                    transcript_rewritten = true;
+                }
+                if let Some(summary) = notice.conversation_summary {
+                    conversation_summary = Some(summary);
+                }
+                on_event(AgentEvent::ContextCompacted {
+                    notice: notice.line,
+                    conversation_summary: conversation_summary.clone(),
+                });
             }
         }
     }
@@ -383,6 +400,8 @@ where
         messages,
         input_tokens: total_in,
         output_tokens: total_out,
+        transcript_rewritten,
+        conversation_summary,
     })
 }
 

@@ -16,12 +16,15 @@ use crate::batch_operations::{
     preview_batch_operations, BatchEditOperation, EditOperation,
 };
 use crate::budget::{format_bytes, measure_prompt_budget};
-use crate::context_guard::{compact_session, context_status_lines, CompactMethod};
 use crate::capabilities::{
     self, best_record, recommended_tool_selection, record_score, sorted_records,
     warmup_recommended, BenchmarkStats, CapabilityRecord, CapabilityStatus,
 };
 use crate::config::{is_tool_name, AgentConfig, OperatorMode, ToolSelection, ALL_TOOL_NAMES};
+use crate::context_guard::{
+    compact_session, context_status_lines, extract_conversation_summary, merge_system_prompt,
+    CompactMethod, CompactSessionContext,
+};
 use crate::handoff::{
     collect_handoff_context, default_export_path as default_handoff_export_path,
     ensure_required_sections, handoff_system_prompt, render_fallback_markdown,
@@ -77,6 +80,7 @@ pub struct AppState {
     pub total_in: u32,
     pub total_out: u32,
     pub context_guard_notice: Option<String>,
+    pub conversation_summary: Option<String>,
 }
 
 impl AppState {
@@ -141,7 +145,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/compare",
         "Run the last user prompt against the OpenRouter cloud (requires OPENROUTER_API_KEY)",
     ),
-    ("/context", "Show or update context limits and auto-guard status"),
+    (
+        "/context",
+        "Show or update context limits and auto-guard status",
+    ),
     ("/compact", "Summarize or trim older conversation turns"),
     ("/doctor", "Check backend, tools, env, and session storage"),
     ("/bench", "Measure warmup, first-token, and total latency"),
@@ -266,6 +273,8 @@ async fn cmd_setup(state: &mut AppState) -> Result<()> {
 
 fn cmd_new(state: &mut AppState) {
     state.messages.clear();
+    state.conversation_summary = None;
+    state.context_guard_notice = None;
     state.reset_session();
     println!("  {GREEN}✓{RESET} {DIM}New session started.{RESET}");
 }
@@ -818,6 +827,10 @@ fn cmd_resume(args: &str, state: &mut AppState) -> Result<()> {
     let messages = load_messages(&path)?;
     state.messages = messages;
     state.session_path = path.clone();
+    state.conversation_summary = state.messages.first().and_then(|message| match message {
+        ChatMessage::System { content } => extract_conversation_summary(content),
+        _ => None,
+    });
     println!(
         "  {GREEN}✓{RESET} {DIM}resumed{RESET} {CYAN}{}{RESET} {DIM}({} messages){RESET}",
         path.file_stem()
@@ -1209,12 +1222,14 @@ fn cmd_context(args: &str, state: &mut AppState) {
     }
     let last_prompt = last_user_prompt(state).unwrap_or_default();
     let active_tool_names = select_tool_names(&state.config, &last_prompt);
-    let system_prompt = render_system_prompt_with_memory(
+    let base_system_prompt = render_system_prompt_with_memory(
         &state.config,
         &state.backend,
         &active_tool_names,
         &last_prompt,
     );
+    let system_prompt =
+        merge_system_prompt(&base_system_prompt, state.conversation_summary.as_deref());
     let tools = build_tools_for_names(&state.config, &active_tool_names);
     let tool_defs = to_openai_tools(&tools);
     let budget = measure_prompt_budget(&system_prompt, &state.messages, &tool_defs);
@@ -1259,6 +1274,7 @@ fn cmd_context(args: &str, state: &mut AppState) {
         state.backend.is_local,
         &budget,
         state.context_guard_notice.as_deref(),
+        state.conversation_summary.as_deref(),
     ) {
         println!("{line}");
     }
@@ -1441,7 +1457,7 @@ async fn cmd_compact(args: &str, state: &mut AppState) -> Result<()> {
     };
     let last_prompt = last_user_prompt(state).unwrap_or_default();
     let active_tool_names = select_tool_names(&state.config, &last_prompt);
-    let system_prompt = render_system_prompt_with_memory(
+    let base_system_prompt = render_system_prompt_with_memory(
         &state.config,
         &state.backend,
         &active_tool_names,
@@ -1456,25 +1472,32 @@ async fn cmd_compact(args: &str, state: &mut AppState) -> Result<()> {
     }
 
     println!("  {DIM}Compacting older messages…{RESET}");
+    let mut compact_ctx = CompactSessionContext {
+        messages: &mut state.messages,
+        system_prompt: &base_system_prompt,
+        tool_defs: &tool_defs,
+        config: &state.config,
+        model: &state.model,
+        is_local: state.backend.is_local,
+        http: &state.http,
+        backend: &state.backend,
+        conversation_summary: state.conversation_summary.as_deref(),
+    };
     let result = compact_session(
-        &mut state.messages,
+        &mut compact_ctx,
         &state.session_dir,
         &mut state.session_path,
-        &system_prompt,
-        &tool_defs,
-        &state.config,
-        &state.model,
-        state.backend.is_local,
-        &state.http,
-        &state.backend,
         keep,
-        true,
     )
     .await?;
 
     if !result.compacted {
         println!("  {DIM}Nothing to compact yet.{RESET}");
         return Ok(());
+    }
+
+    if let Some(summary) = result.conversation_summary {
+        state.conversation_summary = Some(summary);
     }
 
     let method = match result.method {
@@ -1493,10 +1516,7 @@ async fn cmd_compact(args: &str, state: &mut AppState) -> Result<()> {
         "  {GREEN}✓{RESET} {DIM}{}{RESET}",
         state.context_guard_notice.as_deref().unwrap_or("")
     );
-    println!(
-        "  {DIM}session → {}{RESET}",
-        state.session_path.display()
-    );
+    println!("  {DIM}session → {}{RESET}", state.session_path.display());
     Ok(())
 }
 
@@ -3269,6 +3289,7 @@ mod tests {
             total_in: 0,
             total_out: 0,
             context_guard_notice: None,
+            conversation_summary: None,
             config,
         }
     }

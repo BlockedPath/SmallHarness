@@ -32,10 +32,12 @@ use crate::agent::{run_agent, AgentEvent, ApprovalProvider};
 use crate::approval::ApprovalCache;
 use crate::backends::{backend, default_model, validate, BackendDescriptor};
 use crate::banner::{print_banner, BannerInfo};
-use crate::context_guard::maybe_auto_compact;
 use crate::cancel::CancellationToken;
 use crate::commands::{dispatch, AppState};
 use crate::config::{load_config, InputStyle};
+use crate::context_guard::{
+    maybe_auto_compact, merge_system_prompt, rewrite_session_transcript, CompactSessionContext,
+};
 use crate::input::{bordered_read_line, plain_read_line_with_history, InputHistory};
 use crate::loader::Loader;
 use crate::openai::{build_http_client, list_models, ChatMessage};
@@ -168,7 +170,7 @@ async fn run_one_shot(opts: CliOneShot) -> anyhow::Result<()> {
             AgentEvent::ToolResult { name, output, .. } => {
                 let _ = writeln!(out, "\n[tool-result] {name}: {output}");
             }
-            AgentEvent::ContextCompacted { notice } => {
+            AgentEvent::ContextCompacted { notice, .. } => {
                 let _ = writeln!(out, "\n{notice}");
             }
             _ => {}
@@ -344,6 +346,7 @@ async fn main() -> anyhow::Result<()> {
         total_in: 0,
         total_out: 0,
         context_guard_notice: None,
+        conversation_summary: None,
     };
 
     let mut approval_cache = ApprovalCache::new();
@@ -402,12 +405,14 @@ async fn main() -> anyhow::Result<()> {
         }
 
         let active_tool_names = select_tool_names(&state.config, trimmed);
-        let system_prompt = render_system_prompt_with_memory(
+        let base_system_prompt = render_system_prompt_with_memory(
             &state.config,
             &state.backend,
             &active_tool_names,
             trimmed,
         );
+        let system_prompt =
+            merge_system_prompt(&base_system_prompt, state.conversation_summary.as_deref());
         if set_system_message(&mut state.messages, system_prompt.clone()) {
             if let Some(sys) = state.messages.first() {
                 let _ = save_message(&state.session_path, sys);
@@ -421,23 +426,31 @@ async fn main() -> anyhow::Result<()> {
 
         let tools = build_tools_for_names(&state.config, &active_tool_names);
         let tool_defs = crate::agent::to_openai_tools(&tools);
+        let mut compact_ctx = CompactSessionContext {
+            messages: &mut state.messages,
+            system_prompt: &base_system_prompt,
+            tool_defs: &tool_defs,
+            config: &state.config,
+            model: &state.model,
+            is_local: state.backend.is_local,
+            http: &state.http,
+            backend: &state.backend,
+            conversation_summary: state.conversation_summary.as_deref(),
+        };
         if let Some(notice) = maybe_auto_compact(
-            &mut state.messages,
+            &mut compact_ctx,
             &state.session_dir,
             &mut state.session_path,
-            &system_prompt,
-            &tool_defs,
-            &state.config,
-            &state.model,
-            state.backend.is_local,
-            &state.http,
-            &state.backend,
         )
         .await?
         {
-            println!("{notice}");
+            println!("{}", notice.line);
+            if let Some(summary) = notice.conversation_summary {
+                state.conversation_summary = Some(summary);
+            }
             state.context_guard_notice = Some(
                 notice
+                    .line
                     .trim()
                     .trim_start_matches("\x1b[32m✓\x1b[0m \x1b[2m")
                     .trim_end_matches("\x1b[0m")
@@ -448,6 +461,7 @@ async fn main() -> anyhow::Result<()> {
             &state.config,
             &state.model,
             state.backend.is_local,
+            state.conversation_summary.clone(),
         );
         let fingerprint = prompt_fingerprint(
             &state.backend,
@@ -521,7 +535,7 @@ async fn main() -> anyhow::Result<()> {
                 on_event,
                 Some(&mut approval_cache as &mut dyn ApprovalProvider),
                 Some(cancel_for_agent),
-                Some((guard_params, system_prompt.clone())),
+                Some((guard_params, base_system_prompt.clone())),
             )
             .await
         };
@@ -539,8 +553,15 @@ async fn main() -> anyhow::Result<()> {
                         memory_changed = true;
                     }
                 }
-                if let AgentEvent::ContextCompacted { notice } = &e {
+                if let AgentEvent::ContextCompacted {
+                    notice,
+                    conversation_summary,
+                } = &e
+                {
                     state.context_guard_notice = Some(notice.clone());
+                    if let Some(summary) = conversation_summary {
+                        state.conversation_summary = Some(summary.clone());
+                    }
                 }
                 renderer.handle(e);
             }
@@ -558,8 +579,21 @@ async fn main() -> anyhow::Result<()> {
         match result {
             Ok(res) => {
                 state.messages = res.messages;
-                for i in before..state.messages.len() {
-                    let _ = save_message(&state.session_path, &state.messages[i]);
+                if let Some(summary) = res.conversation_summary {
+                    state.conversation_summary = Some(summary);
+                }
+                if res.transcript_rewritten || state.messages.len() < before {
+                    if let Err(e) = rewrite_session_transcript(
+                        &state.session_dir,
+                        &mut state.session_path,
+                        &state.messages,
+                    ) {
+                        println!("  {RED}✗{RESET} {DIM}session rewrite failed: {e}{RESET}");
+                    }
+                } else {
+                    for message in &state.messages[before..] {
+                        let _ = save_message(&state.session_path, message);
+                    }
                 }
                 state.total_in += res.input_tokens;
                 state.total_out += res.output_tokens;

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use std::collections::HashSet;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use crate::backends::BackendDescriptor;
@@ -253,20 +254,117 @@ fn non_system_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
         .collect()
 }
 
-fn split_into_turns(messages: &[ChatMessage]) -> Vec<Vec<ChatMessage>> {
+fn split_into_turns(messages: &[ChatMessage]) -> Vec<Range<usize>> {
     let mut turns = Vec::new();
-    let mut current = Vec::new();
-    for message in messages {
-        if matches!(message, ChatMessage::User { .. }) && !current.is_empty() {
-            turns.push(current);
-            current = Vec::new();
+    let mut start = 0usize;
+    for (idx, message) in messages.iter().enumerate() {
+        if idx > start && matches!(message, ChatMessage::User { .. }) {
+            turns.push(start..idx);
+            start = idx;
         }
-        current.push(message.clone());
     }
-    if !current.is_empty() {
-        turns.push(current);
+    if start < messages.len() {
+        turns.push(start..messages.len());
     }
     turns
+}
+
+fn split_into_context_spans(messages: &[ChatMessage]) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut idx = 0usize;
+    while idx < messages.len() {
+        let start = idx;
+        match &messages[idx] {
+            ChatMessage::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
+                idx += 1;
+                let mut pending: HashSet<String> = tool_calls
+                    .iter()
+                    .filter_map(|tool_call| {
+                        if tool_call.id.is_empty() {
+                            None
+                        } else {
+                            Some(tool_call.id.clone())
+                        }
+                    })
+                    .collect();
+                while idx < messages.len() {
+                    match &messages[idx] {
+                        ChatMessage::Tool { tool_call_id, .. } => {
+                            pending.remove(tool_call_id);
+                            idx += 1;
+                            if pending.is_empty() {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            _ => {
+                idx += 1;
+            }
+        }
+        spans.push(start..idx);
+    }
+    spans
+}
+
+fn partition_by_ranges(
+    non_system: &[ChatMessage],
+    ranges: &[Range<usize>],
+    keep_messages: usize,
+) -> Option<(Vec<ChatMessage>, Vec<ChatMessage>)> {
+    if ranges.len() <= 1 {
+        return None;
+    }
+
+    let mut recent_start = ranges.len();
+    let mut kept_messages = 0usize;
+    while recent_start > 0 {
+        let range = &ranges[recent_start - 1];
+        let range_len = range.end.saturating_sub(range.start);
+        if kept_messages > 0 && kept_messages + range_len > keep_messages {
+            break;
+        }
+        recent_start -= 1;
+        kept_messages += range_len;
+        if kept_messages >= keep_messages {
+            break;
+        }
+    }
+
+    if recent_start == 0 {
+        return None;
+    }
+
+    while recent_start < ranges.len()
+        && matches!(
+            non_system.get(ranges[recent_start].start),
+            Some(ChatMessage::Tool { .. })
+        )
+    {
+        recent_start += 1;
+    }
+
+    let split_at = ranges
+        .get(recent_start)
+        .map(|range| range.start)
+        .unwrap_or(non_system.len());
+    let older = non_system[..split_at].to_vec();
+    let recent = non_system[split_at..].to_vec();
+    if older.is_empty() {
+        return None;
+    }
+    validate_transcript(&recent).ok()?;
+    Some((older, recent))
+}
+
+fn partition_by_spans(
+    non_system: &[ChatMessage],
+    keep_messages: usize,
+) -> Option<(Vec<ChatMessage>, Vec<ChatMessage>)> {
+    let spans = split_into_context_spans(non_system);
+    partition_by_ranges(non_system, &spans, keep_messages)
 }
 
 fn partition_for_keep(
@@ -274,33 +372,19 @@ fn partition_for_keep(
     keep_messages: usize,
 ) -> Option<(Vec<ChatMessage>, Vec<ChatMessage>)> {
     let turns = split_into_turns(non_system);
-    if turns.len() <= 1 {
-        return None;
+    let Some((mut older, recent)) = partition_by_ranges(non_system, &turns, keep_messages) else {
+        return partition_by_spans(non_system, keep_messages);
+    };
+
+    if recent.len() <= keep_messages {
+        return Some((older, recent));
     }
 
-    let mut recent_turns = Vec::new();
-    let mut kept_messages = 0usize;
-    for turn in turns.iter().rev() {
-        if !recent_turns.is_empty() && kept_messages >= keep_messages {
-            break;
-        }
-        kept_messages += turn.len();
-        recent_turns.push(turn.clone());
-    }
-    recent_turns.reverse();
-
-    let kept_turns = recent_turns.len();
-    if kept_turns == turns.len() {
-        return None;
+    if let Some((older_within_recent, recent_suffix)) = partition_by_spans(&recent, keep_messages) {
+        older.extend(older_within_recent);
+        return Some((older, recent_suffix));
     }
 
-    let older: Vec<ChatMessage> = turns[..turns.len() - kept_turns]
-        .iter()
-        .flatten()
-        .cloned()
-        .collect();
-    let recent: Vec<ChatMessage> = recent_turns.iter().flatten().cloned().collect();
-    validate_transcript(&recent).ok()?;
     Some((older, recent))
 }
 
@@ -329,6 +413,38 @@ fn append_summary(existing: Option<&str>, addition: &str) -> String {
     }
 }
 
+fn truncate_summary_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push_str("...");
+    out
+}
+
+fn deterministic_summary(messages: &[ChatMessage]) -> String {
+    let user_count = messages
+        .iter()
+        .filter(|message| matches!(message, ChatMessage::User { .. }))
+        .count();
+    let tool_count = messages
+        .iter()
+        .filter(|message| matches!(message, ChatMessage::Tool { .. }))
+        .count();
+    let last_user = messages.iter().rev().find_map(|message| match message {
+        ChatMessage::User { content } => Some(truncate_summary_text(content.trim(), 240)),
+        _ => None,
+    });
+    match last_user {
+        Some(last_user) if !last_user.is_empty() => format!(
+            "[Earlier conversation trimmed to fit context budget: {user_count} user message(s), {tool_count} tool result(s). Last user request before trim: {last_user}]"
+        ),
+        _ => format!(
+            "[Earlier conversation trimmed to fit context budget: {user_count} user message(s), {tool_count} tool result(s).]"
+        ),
+    }
+}
+
 fn build_compacted_messages(
     system_prompt: &str,
     summary: Option<&str>,
@@ -347,12 +463,16 @@ pub async fn summarize_transcript(
     http: &Client,
     backend: &BackendDescriptor,
     model: &str,
+    existing_summary: Option<&str>,
     older: &[ChatMessage],
 ) -> Result<String> {
-    let transcript = serde_json::to_string(older)?;
+    let transcript = serde_json::to_string(&serde_json::json!({
+        "existingSummary": existing_summary.unwrap_or(""),
+        "newMessages": older,
+    }))?;
     let messages = vec![
         ChatMessage::System {
-            content: "Summarize this Small Harness conversation for continuing context. Preserve goals, decisions, files touched, errors, and pending work. Be concise.".into(),
+            content: "Update this Small Harness conversation summary for continuing context. Preserve durable goals, decisions, files touched, errors, and pending work. Fold the existing summary and new messages into one concise summary without duplicating details.".into(),
         },
         ChatMessage::User {
             content: transcript,
@@ -413,7 +533,8 @@ async fn compact_messages_core(req: CompactRequest<'_>) -> Result<CompactResult>
         conversation_summary,
     } = req;
 
-    let budget_before = measure_prompt_budget(system_prompt, messages, tool_defs);
+    let active_system_prompt = merge_system_prompt(system_prompt, conversation_summary);
+    let budget_before = measure_prompt_budget(&active_system_prompt, messages, tool_defs);
     let before_messages = messages.len();
     let before_ratio = usage_ratio(&budget_before, limit_bytes);
 
@@ -444,22 +565,31 @@ async fn compact_messages_core(req: CompactRequest<'_>) -> Result<CompactResult>
 
     let use_tier2 = transcript_json_bytes(&older) > summarize_budget_bytes;
     let (method, new_summary) = if use_tier2 {
+        let addition = deterministic_summary(&older);
         (
             CompactMethod::DeterministicTrim,
-            append_summary(
-                conversation_summary,
-                "[Earlier conversation trimmed to fit context budget]",
-            ),
+            append_summary(conversation_summary, &addition),
         )
     } else {
-        let summary = summarize_transcript(http, backend, model, &older).await?;
-        (CompactMethod::LlmSummary, summary.trim().to_string())
+        match summarize_transcript(http, backend, model, conversation_summary, &older).await {
+            Ok(summary) if !summary.trim().is_empty() => {
+                (CompactMethod::LlmSummary, summary.trim().to_string())
+            }
+            Ok(_) | Err(_) => {
+                let addition = deterministic_summary(&older);
+                (
+                    CompactMethod::DeterministicTrim,
+                    append_summary(conversation_summary, &addition),
+                )
+            }
+        }
     };
 
     let compacted_messages = build_compacted_messages(system_prompt, Some(&new_summary), recent)?;
     *messages = compacted_messages;
 
-    let budget_after = measure_prompt_budget(system_prompt, messages, tool_defs);
+    let active_system_prompt = merge_system_prompt(system_prompt, Some(&new_summary));
+    let budget_after = measure_prompt_budget(&active_system_prompt, messages, tool_defs);
     let after_ratio = usage_ratio(&budget_after, limit_bytes);
 
     Ok(CompactResult {
@@ -518,7 +648,8 @@ pub async fn maybe_auto_compact(
     session_path: &mut PathBuf,
 ) -> Result<Option<CompactNotice>> {
     let guard = guard_config_from(ctx.config, ctx.model, ctx.is_local);
-    let budget = measure_prompt_budget(ctx.system_prompt, ctx.messages, ctx.tool_defs);
+    let active_system_prompt = merge_system_prompt(ctx.system_prompt, ctx.conversation_summary);
+    let budget = measure_prompt_budget(&active_system_prompt, ctx.messages, ctx.tool_defs);
 
     if !guard.auto_compact {
         if should_compact(
@@ -583,7 +714,9 @@ pub async fn maybe_compact_messages(
         return Ok(None);
     }
 
-    let budget = measure_prompt_budget(system_prompt, messages, tool_defs);
+    let active_system_prompt =
+        merge_system_prompt(system_prompt, guard.conversation_summary.as_deref());
+    let budget = measure_prompt_budget(&active_system_prompt, messages, tool_defs);
     if !should_compact(
         &budget,
         guard.effective_limit_bytes,
@@ -666,6 +799,7 @@ pub fn context_status_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::{BackendDescriptor, BackendName};
     use crate::config::ContextConfig;
     use crate::openai::{ToolCall, ToolFunction};
 
@@ -751,6 +885,100 @@ mod tests {
         assert_eq!(older.len(), 3);
         assert_eq!(recent.len(), 2);
         validate_transcript(&recent).expect("valid recent transcript");
+    }
+
+    #[test]
+    fn partition_can_split_large_single_user_turn_on_tool_boundaries() {
+        let messages = vec![
+            ChatMessage::User {
+                content: "use multiple tools".into(),
+            },
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![ToolCall {
+                    id: "call-1".into(),
+                    kind: "function".into(),
+                    function: ToolFunction {
+                        name: "grep".into(),
+                        arguments: "{}".into(),
+                    },
+                }],
+            },
+            ChatMessage::Tool {
+                tool_call_id: "call-1".into(),
+                content: "first".into(),
+            },
+            ChatMessage::Assistant {
+                content: None,
+                tool_calls: vec![ToolCall {
+                    id: "call-2".into(),
+                    kind: "function".into(),
+                    function: ToolFunction {
+                        name: "file_read".into(),
+                        arguments: "{}".into(),
+                    },
+                }],
+            },
+            ChatMessage::Tool {
+                tool_call_id: "call-2".into(),
+                content: "second".into(),
+            },
+        ];
+        let (older, recent) = partition_for_keep(&messages, 3).expect("partition");
+        assert_eq!(older.len(), 3);
+        assert_eq!(recent.len(), 2);
+        validate_transcript(&recent).expect("valid recent transcript");
+        assert!(matches!(
+            &recent[0],
+            ChatMessage::Assistant { tool_calls, .. } if tool_calls[0].id == "call-2"
+        ));
+    }
+
+    #[tokio::test]
+    async fn compact_budget_counts_existing_summary_bytes() {
+        let mut messages = vec![
+            ChatMessage::System {
+                content: "sys".into(),
+            },
+            ChatMessage::User {
+                content: "old request".into(),
+            },
+            ChatMessage::Assistant {
+                content: Some("old answer".into()),
+                tool_calls: vec![],
+            },
+            ChatMessage::User {
+                content: "current request".into(),
+            },
+        ];
+        let existing_summary = "x".repeat(500);
+        let backend = BackendDescriptor {
+            name: BackendName::Ollama,
+            base_url: "http://127.0.0.1:9/v1".into(),
+            api_key: "test".into(),
+            is_local: true,
+        };
+        let http = Client::new();
+        let result = compact_messages_core(CompactRequest {
+            messages: &mut messages,
+            system_prompt: "sys",
+            tool_defs: &[],
+            keep_messages: 1,
+            limit_bytes: 1000,
+            summarize_budget_bytes: 0,
+            http: &http,
+            backend: &backend,
+            model: "mock",
+            conversation_summary: Some(&existing_summary),
+        })
+        .await
+        .expect("deterministic compaction");
+
+        assert!(result.before_ratio > 0.5);
+        assert!(result
+            .conversation_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains(&existing_summary)));
     }
 
     #[test]

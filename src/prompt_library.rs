@@ -214,7 +214,7 @@ pub fn list_prompts(session_dir: &str) -> Result<Vec<String>> {
     for entry in fs::read_dir(&prompt_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "md") {
+        if path.extension().is_some_and(|ext| ext == "md") {
             if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
                 prompts.push(name.to_string());
             }

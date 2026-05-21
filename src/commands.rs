@@ -434,7 +434,7 @@ fn cmd_mode(args: &str, state: &mut AppState) {
 
 fn cmd_shipcheck(args: &str, state: &AppState) -> Result<()> {
     let parts: Vec<&str> = args.split_whitespace().collect();
-    let action = parts.first().map(|s| *s);
+    let action = parts.first().copied();
     let export = matches!(action, Some("export") | Some("save"));
     let run_tests = args.contains("--tests");
 
@@ -1465,11 +1465,6 @@ async fn cmd_compact(args: &str, state: &mut AppState) -> Result<()> {
     );
     let tools = build_tools_for_names(&state.config, &active_tool_names);
     let tool_defs = to_openai_tools(&tools);
-
-    if state.messages.len() <= keep.unwrap_or(state.config.context.max_messages.unwrap_or(12)) + 1 {
-        println!("  {DIM}Nothing to compact yet.{RESET}");
-        return Ok(());
-    }
 
     println!("  {DIM}Compacting older messages…{RESET}");
     let mut compact_ctx = CompactSessionContext {

@@ -14,7 +14,7 @@ pub struct TestDiscovery {
     pub run_command: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestResult {
     pub total: usize,
@@ -104,7 +104,7 @@ fn find_python_test_files(root: &Path) -> Result<Vec<String>> {
 
     for entry in workspace_files(root) {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "py") {
+        if path.extension().is_some_and(|ext| ext == "py") {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if filename.starts_with("test_") || filename.ends_with("_test.py") {
                 test_files.push(relative_slash_path(root, path));
@@ -120,7 +120,7 @@ fn find_rust_test_files(root: &Path) -> Result<Vec<String>> {
 
     for entry in workspace_files(root) {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "rs") {
+        if path.extension().is_some_and(|ext| ext == "rs") {
             let rel_path = relative_slash_path(root, path);
             if rel_path.starts_with("tests/") {
                 test_files.push(rel_path);
@@ -143,9 +143,10 @@ fn find_js_test_files(root: &Path) -> Result<Vec<String>> {
 
     for entry in workspace_files(root) {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| {
-            matches!(ext.to_str(), Some("js" | "ts" | "jsx" | "tsx"))
-        }) {
+        if path
+            .extension()
+            .is_some_and(|ext| matches!(ext.to_str(), Some("js" | "ts" | "jsx" | "tsx")))
+        {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let rel_path = relative_slash_path(root, path);
             if filename.contains(".test.")
@@ -166,7 +167,7 @@ fn find_go_test_files(root: &Path) -> Result<Vec<String>> {
 
     for entry in workspace_files(root) {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "go") {
+        if path.extension().is_some_and(|ext| ext == "go") {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if filename.ends_with("_test.go") {
                 test_files.push(relative_slash_path(root, path));
@@ -383,7 +384,7 @@ fn parse_pytest_output(output: &str) -> TestResult {
                     current_failure.clear();
                 }
             } else {
-                current_failure.push_str("\n");
+                current_failure.push('\n');
                 current_failure.push_str(line);
             }
         }
@@ -436,7 +437,7 @@ fn parse_cargo_output(output: &str) -> TestResult {
                     current_failure.clear();
                 }
             } else {
-                current_failure.push_str("\n");
+                current_failure.push('\n');
                 current_failure.push_str(line);
             }
         }
@@ -501,20 +502,6 @@ fn extract_number(line: &str, keyword: &str) -> Option<usize> {
     None
 }
 
-impl Default for TestResult {
-    fn default() -> Self {
-        Self {
-            total: 0,
-            passed: 0,
-            failed: 0,
-            skipped: 0,
-            failures: vec![],
-            exit_code: 0,
-            output: String::new(),
-        }
-    }
-}
-
 pub fn smart_test_selection(workspace_root: &str) -> Result<Vec<String>> {
     let root = Path::new(workspace_root);
 
@@ -565,10 +552,8 @@ pub fn smart_test_selection(workspace_root: &str) -> Result<Vec<String>> {
             let directory_match =
                 !changed_parent.is_empty() && test_parent.starts_with(&changed_parent);
 
-            if stem_match || directory_match {
-                if !selected_tests.contains(test_file) {
-                    selected_tests.push(test_file.clone());
-                }
+            if (stem_match || directory_match) && !selected_tests.contains(test_file) {
+                selected_tests.push(test_file.clone());
             }
         }
     }

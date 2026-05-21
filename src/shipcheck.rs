@@ -52,6 +52,7 @@ pub struct TestStatus {
     pub failed: usize,
     pub skipped: usize,
     pub exit_code: i32,
+    pub error: Option<String>,
 }
 
 impl ShipcheckSnapshot {
@@ -110,7 +111,10 @@ pub fn collect_shipcheck(workspace_root: &str) -> Result<ShipcheckSnapshot> {
     collect_shipcheck_with_tests(workspace_root, false)
 }
 
-pub fn collect_shipcheck_with_tests(workspace_root: &str, run_tests_flag: bool) -> Result<ShipcheckSnapshot> {
+pub fn collect_shipcheck_with_tests(
+    workspace_root: &str,
+    run_tests_flag: bool,
+) -> Result<ShipcheckSnapshot> {
     let git_root = run_git(workspace_root, &["rev-parse", "--show-toplevel"])?
         .trim()
         .to_string();
@@ -120,7 +124,17 @@ pub fn collect_shipcheck_with_tests(workspace_root: &str, run_tests_flag: bool) 
     let unstaged_diff_stat = run_git(workspace_root, &["diff", "--stat", "--"])?;
 
     let test_status = if run_tests_flag {
-        run_shipcheck_tests(workspace_root).ok()
+        Some(
+            run_shipcheck_tests(workspace_root).unwrap_or_else(|e| TestStatus {
+                framework: "unknown".to_string(),
+                total: 0,
+                passed: 0,
+                failed: 0,
+                skipped: 0,
+                exit_code: 1,
+                error: Some(e.to_string()),
+            }),
+        )
     } else {
         None
     };
@@ -146,6 +160,7 @@ fn run_shipcheck_tests(workspace_root: &str) -> Result<TestStatus> {
             failed: 0,
             skipped: 0,
             exit_code: 0,
+            error: None,
         });
     }
 
@@ -157,6 +172,7 @@ fn run_shipcheck_tests(workspace_root: &str) -> Result<TestStatus> {
         failed: test_result.failed,
         skipped: test_result.skipped,
         exit_code: test_result.exit_code,
+        error: None,
     })
 }
 
@@ -359,6 +375,9 @@ pub fn render_markdown(
             out.push_str(&format!("- Failed: {}\n", status.failed));
             out.push_str(&format!("- Skipped: {}\n", status.skipped));
             out.push_str(&format!("- Exit code: {}\n", status.exit_code));
+            if let Some(error) = &status.error {
+                out.push_str(&format!("- Error: `{error}`\n"));
+            }
             if status.failed > 0 || status.exit_code != 0 {
                 out.push_str("- Status: **FAILED**\n");
             } else {

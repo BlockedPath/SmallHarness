@@ -1,5 +1,7 @@
 use anyhow::Result;
+use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -24,70 +26,72 @@ pub struct TestResult {
     pub output: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestInvocation {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
 pub fn discover_tests(workspace_root: &str) -> Result<TestDiscovery> {
     let root = Path::new(workspace_root);
-    
-    // Check for Python/pytest
-    if root.join("pytest.ini").exists() 
+
+    let python_tests = find_python_test_files(root)?;
+    if root.join("pytest.ini").exists()
         || root.join("pyproject.toml").exists()
         || root.join("setup.py").exists()
-        || root.join("requirements.txt").exists() {
-        
-        let test_files = find_python_test_files(root)?;
-        if !test_files.is_empty() {
-            return Ok(TestDiscovery {
-                framework: "pytest".to_string(),
-                test_files,
-                run_command: Some("pytest".to_string()),
-            });
-        }
+        || root.join("requirements.txt").exists()
+    {
+        return Ok(TestDiscovery {
+            framework: "pytest".to_string(),
+            test_files: python_tests,
+            run_command: Some("pytest".to_string()),
+        });
     }
-    
-    // Check for Rust/cargo
+
     if root.join("Cargo.toml").exists() {
         let test_files = find_rust_test_files(root)?;
-        if !test_files.is_empty() {
-            return Ok(TestDiscovery {
-                framework: "cargo".to_string(),
-                test_files,
-                run_command: Some("cargo test".to_string()),
-            });
-        }
+        return Ok(TestDiscovery {
+            framework: "cargo".to_string(),
+            test_files,
+            run_command: Some("cargo test".to_string()),
+        });
     }
-    
-    // Check for JavaScript/npm
+
     if root.join("package.json").exists() {
         let test_files = find_js_test_files(root)?;
-        if !test_files.is_empty() {
-            let package_json = root.join("package.json");
-            if let Ok(content) = fs::read_to_string(&package_json) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
-                        if scripts.contains_key("test") {
-                            return Ok(TestDiscovery {
-                                framework: "npm".to_string(),
-                                test_files,
-                                run_command: Some("npm test".to_string()),
-                            });
-                        }
+        let package_json = root.join("package.json");
+        if let Ok(content) = fs::read_to_string(&package_json) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
+                    if scripts.contains_key("test") {
+                        return Ok(TestDiscovery {
+                            framework: "npm".to_string(),
+                            test_files,
+                            run_command: Some("npm test".to_string()),
+                        });
                     }
                 }
             }
         }
     }
-    
-    // Check for Go
+
     if root.join("go.mod").exists() {
         let test_files = find_go_test_files(root)?;
-        if !test_files.is_empty() {
-            return Ok(TestDiscovery {
-                framework: "go".to_string(),
-                test_files,
-                run_command: Some("go test ./...".to_string()),
-            });
-        }
+        return Ok(TestDiscovery {
+            framework: "go".to_string(),
+            test_files,
+            run_command: Some("go test ./...".to_string()),
+        });
     }
-    
+
+    if !python_tests.is_empty() {
+        return Ok(TestDiscovery {
+            framework: "pytest".to_string(),
+            test_files: python_tests,
+            run_command: Some("pytest".to_string()),
+        });
+    }
+
     Ok(TestDiscovery {
         framework: "unknown".to_string(),
         test_files: vec![],
@@ -97,93 +101,86 @@ pub fn discover_tests(workspace_root: &str) -> Result<TestDiscovery> {
 
 fn find_python_test_files(root: &Path) -> Result<Vec<String>> {
     let mut test_files = Vec::new();
-    
-    for entry in walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+
+    for entry in workspace_files(root) {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "py") {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if filename.starts_with("test_") || filename.ends_with("_test.py") {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    test_files.push(rel.display().to_string());
-                }
+                test_files.push(relative_slash_path(root, path));
             }
         }
     }
-    
+
     Ok(test_files)
 }
 
 fn find_rust_test_files(root: &Path) -> Result<Vec<String>> {
     let mut test_files = Vec::new();
-    
-    for entry in walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+
+    for entry in workspace_files(root) {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "rs") {
-            if let Ok(content) = fs::read_to_string(path) {
-                if content.contains("#[test]") || content.contains("#[cfg(test)]") {
-                    if let Ok(rel) = path.strip_prefix(root) {
-                        test_files.push(rel.display().to_string());
-                    }
-                }
+            let rel_path = relative_slash_path(root, path);
+            if rel_path.starts_with("tests/") {
+                test_files.push(rel_path);
+                continue;
+            }
+            if fs::read_to_string(path)
+                .map(|content| content.contains("#[test]") || content.contains("#[cfg(test)]"))
+                .unwrap_or(false)
+            {
+                test_files.push(rel_path);
             }
         }
     }
-    
+
     Ok(test_files)
 }
 
 fn find_js_test_files(root: &Path) -> Result<Vec<String>> {
     let mut test_files = Vec::new();
-    
-    for entry in walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+
+    for entry in workspace_files(root) {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "js" || ext == "ts") {
+        if path.extension().map_or(false, |ext| {
+            matches!(ext.to_str(), Some("js" | "ts" | "jsx" | "tsx"))
+        }) {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if filename.contains(".test.") || filename.contains(".spec.") {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    test_files.push(rel.display().to_string());
-                }
+            let rel_path = relative_slash_path(root, path);
+            if filename.contains(".test.")
+                || filename.contains(".spec.")
+                || rel_path.contains("/__tests__/")
+                || rel_path.starts_with("__tests__/")
+            {
+                test_files.push(rel_path);
             }
         }
     }
-    
+
     Ok(test_files)
 }
 
 fn find_go_test_files(root: &Path) -> Result<Vec<String>> {
     let mut test_files = Vec::new();
-    
-    for entry in walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+
+    for entry in workspace_files(root) {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "go") {
             let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if filename.ends_with("_test.go") {
-                if let Ok(rel) = path.strip_prefix(root) {
-                    test_files.push(rel.display().to_string());
-                }
+                test_files.push(relative_slash_path(root, path));
             }
         }
     }
-    
+
     Ok(test_files)
 }
 
 pub fn run_tests(workspace_root: &str, pattern: Option<&str>) -> Result<TestResult> {
     let root = Path::new(workspace_root);
     let discovery = discover_tests(workspace_root)?;
-    
+
     if discovery.framework == "unknown" {
         return Ok(TestResult {
             total: 0,
@@ -195,31 +192,134 @@ pub fn run_tests(workspace_root: &str, pattern: Option<&str>) -> Result<TestResu
             output: String::new(),
         });
     }
-    
-    let command = discovery.run_command.unwrap_or_default();
-    let full_command = if let Some(pattern) = pattern {
-        format!("{} -k {}", command, pattern)
-    } else {
-        command
-    };
-    
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&full_command)
+
+    let invocation = build_test_invocation(&discovery.framework, pattern);
+    let output = run_invocation(root, &invocation)?;
+    Ok(parse_completed_output(output, &discovery.framework))
+}
+
+pub fn run_selected_tests(workspace_root: &str, selected_tests: &[String]) -> Result<TestResult> {
+    let root = Path::new(workspace_root);
+    let discovery = discover_tests(workspace_root)?;
+    if discovery.framework == "unknown" {
+        return run_tests(workspace_root, None);
+    }
+    if selected_tests.is_empty() {
+        return Ok(TestResult::default());
+    }
+    let invocation = build_selected_test_invocation(&discovery.framework, selected_tests);
+    let output = run_invocation(root, &invocation)?;
+    Ok(parse_completed_output(output, &discovery.framework))
+}
+
+pub fn build_test_invocation(framework: &str, pattern: Option<&str>) -> TestInvocation {
+    let pattern = pattern.map(str::trim).filter(|p| !p.is_empty());
+    match framework {
+        "pytest" => TestInvocation {
+            program: "pytest".into(),
+            args: pattern
+                .map(|p| vec!["-k".into(), p.into()])
+                .unwrap_or_default(),
+        },
+        "cargo" => TestInvocation {
+            program: "cargo".into(),
+            args: {
+                let mut args = vec!["test".into()];
+                if let Some(pattern) = pattern {
+                    args.push(pattern.into());
+                }
+                args
+            },
+        },
+        "npm" => TestInvocation {
+            program: "npm".into(),
+            args: {
+                let mut args = vec!["test".into()];
+                if let Some(pattern) = pattern {
+                    args.push("--".into());
+                    args.push(pattern.into());
+                }
+                args
+            },
+        },
+        "go" => TestInvocation {
+            program: "go".into(),
+            args: {
+                let mut args = vec!["test".into(), "./...".into()];
+                if let Some(pattern) = pattern {
+                    args.push("-run".into());
+                    args.push(pattern.into());
+                }
+                args
+            },
+        },
+        _ => TestInvocation {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    }
+}
+
+fn build_selected_test_invocation(framework: &str, selected_tests: &[String]) -> TestInvocation {
+    match framework {
+        "pytest" => TestInvocation {
+            program: "pytest".into(),
+            args: selected_tests.to_vec(),
+        },
+        "cargo" => TestInvocation {
+            program: "cargo".into(),
+            args: vec!["test".into()],
+        },
+        "npm" => TestInvocation {
+            program: "npm".into(),
+            args: {
+                let mut args = vec!["test".into(), "--".into()];
+                args.extend(selected_tests.iter().cloned());
+                args
+            },
+        },
+        "go" => TestInvocation {
+            program: "go".into(),
+            args: {
+                let mut dirs = BTreeSet::new();
+                for file in selected_tests {
+                    let path = Path::new(file);
+                    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+                    let dir = if dir.as_os_str().is_empty() {
+                        ".".to_string()
+                    } else {
+                        format!("./{}", dir.display())
+                    };
+                    dirs.insert(dir);
+                }
+                let mut args = vec!["test".into()];
+                args.extend(dirs);
+                args
+            },
+        },
+        _ => build_test_invocation(framework, None),
+    }
+}
+
+fn run_invocation(root: &Path, invocation: &TestInvocation) -> Result<std::process::Output> {
+    Ok(Command::new(&invocation.program)
+        .args(&invocation.args)
         .current_dir(root)
-        .output()?;
-    
+        .output()?)
+}
+
+fn parse_completed_output(output: std::process::Output, framework: &str) -> TestResult {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined_output = format!("{}\n{}", stdout, stderr);
-    
-    let result = parse_test_results(&combined_output, &discovery.framework);
-    
-    Ok(TestResult {
+
+    let result = parse_test_results(&combined_output, framework);
+
+    TestResult {
         output: combined_output,
         exit_code: output.status.code().unwrap_or(1),
         ..result
-    })
+    }
 }
 
 pub fn parse_test_results(output: &str, framework: &str) -> TestResult {
@@ -242,8 +342,7 @@ pub fn parse_test_results(output: &str, framework: &str) -> TestResult {
 
 fn parse_pytest_output(output: &str) -> TestResult {
     let mut result = TestResult::default();
-    
-    // Parse pytest summary
+
     for line in output.lines() {
         if line.contains(" passed") {
             if let Some(passed) = extract_number(line, "passed") {
@@ -261,14 +360,13 @@ fn parse_pytest_output(output: &str) -> TestResult {
             }
         }
     }
-    
+
     result.total = result.passed + result.failed + result.skipped;
-    
-    // Extract failure messages
+
     let mut failures = Vec::new();
     let mut in_failure = false;
     let mut current_failure = String::new();
-    
+
     for line in output.lines() {
         if line.contains("FAILED") {
             in_failure = true;
@@ -290,36 +388,38 @@ fn parse_pytest_output(output: &str) -> TestResult {
             }
         }
     }
-    
+
     if !current_failure.is_empty() {
         failures.push(current_failure);
     }
-    
+
     result.failures = failures;
     result
 }
 
 fn parse_cargo_output(output: &str) -> TestResult {
     let mut result = TestResult::default();
-    
+
     for line in output.lines() {
         if line.contains("test result:") {
             if let Some(passed) = extract_number(line, "passed") {
-                result.passed = passed;
+                result.passed += passed;
             }
             if let Some(failed) = extract_number(line, "failed") {
-                result.failed = failed;
+                result.failed += failed;
+            }
+            if let Some(skipped) = extract_number(line, "ignored") {
+                result.skipped += skipped;
             }
         }
     }
-    
+
     result.total = result.passed + result.failed + result.skipped;
-    
-    // Extract failures
+
     let mut failures = Vec::new();
     let mut in_failure = false;
     let mut current_failure = String::new();
-    
+
     for line in output.lines() {
         if line.contains("FAILED") {
             in_failure = true;
@@ -341,19 +441,18 @@ fn parse_cargo_output(output: &str) -> TestResult {
             }
         }
     }
-    
+
     if !current_failure.is_empty() {
         failures.push(current_failure);
     }
-    
+
     result.failures = failures;
     result
 }
 
 fn parse_npm_output(output: &str) -> TestResult {
     let mut result = TestResult::default();
-    
-    // Try to extract from common test reporters
+
     for line in output.lines() {
         if line.contains("passing") || line.contains("✓") {
             result.passed += 1;
@@ -362,23 +461,23 @@ fn parse_npm_output(output: &str) -> TestResult {
             result.failed += 1;
         }
     }
-    
+
     result.total = result.passed + result.failed + result.skipped;
     result
 }
 
 fn parse_go_output(output: &str) -> TestResult {
     let mut result = TestResult::default();
-    
+
     for line in output.lines() {
-        if line.contains("PASS") {
+        if line.trim_start().starts_with("--- PASS:") {
             result.passed += 1;
         }
-        if line.contains("FAIL") {
+        if line.trim_start().starts_with("--- FAIL:") {
             result.failed += 1;
         }
     }
-    
+
     result.total = result.passed + result.failed + result.skipped;
     result
 }
@@ -418,51 +517,169 @@ impl Default for TestResult {
 
 pub fn smart_test_selection(workspace_root: &str) -> Result<Vec<String>> {
     let root = Path::new(workspace_root);
-    
-    // Get git changes
+
     let output = Command::new("git")
         .args(["diff", "--name-only", "HEAD"])
         .current_dir(root)
         .output()?;
-    
+
     if !output.status.success() {
-        // If git fails, return all tests
         let discovery = discover_tests(workspace_root)?;
         return Ok(discovery.test_files);
     }
-    
+
     let changed_files: Vec<String> = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|line| !line.is_empty())
         .map(|s| s.to_string())
         .collect();
-    
+
     if changed_files.is_empty() {
         return Ok(vec![]);
     }
-    
+
     let discovery = discover_tests(workspace_root)?;
     let mut selected_tests = Vec::new();
-    
-    for changed_file in changed_files {
+
+    for changed_file in &changed_files {
+        let changed_path = Path::new(changed_file);
+        let changed_stem = changed_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("");
+        let changed_parent = changed_path
+            .parent()
+            .map(relative_dir_string)
+            .unwrap_or_default();
         for test_file in &discovery.test_files {
-            // Simple heuristic: if test file is in same directory or has similar name
-            let changed_base = changed_file.replace(".rs", "").replace(".py", "").replace(".js", "");
-            let test_file_matches = test_file.contains(&changed_base);
-            
-            let dir_match = if let Some(first_part) = changed_file.split('/').next() {
-                test_file.starts_with(first_part)
-            } else {
-                false
-            };
-            
-            if test_file_matches || dir_match {
+            let test_path = Path::new(test_file);
+            let test_parent = test_path
+                .parent()
+                .map(relative_dir_string)
+                .unwrap_or_default();
+            let test_stem = test_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("");
+            let stem_match = !changed_stem.is_empty() && test_stem.contains(changed_stem);
+            let directory_match =
+                !changed_parent.is_empty() && test_parent.starts_with(&changed_parent);
+
+            if stem_match || directory_match {
                 if !selected_tests.contains(test_file) {
                     selected_tests.push(test_file.clone());
                 }
             }
         }
     }
-    
+
+    if selected_tests.is_empty() && !discovery.test_files.is_empty() {
+        return Ok(discovery.test_files);
+    }
+
     Ok(selected_tests)
+}
+
+fn workspace_files(root: &Path) -> Vec<ignore::DirEntry> {
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .standard_filters(true)
+        .hidden(false)
+        .require_git(false);
+    builder.filter_entry(|entry| !has_skipped_component(entry.path()));
+    builder
+        .build()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        .collect()
+}
+
+fn has_skipped_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some(".git" | ".sessions" | "target" | "node_modules")
+        )
+    })
+}
+
+fn relative_slash_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn relative_dir_string(path: &Path) -> String {
+    if path.as_os_str().is_empty() {
+        String::new()
+    } else {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_framework_specific_commands_without_shell() {
+        let pytest = build_test_invocation("pytest", Some("test_name; rm -rf /"));
+        assert_eq!(pytest.program, "pytest");
+        assert_eq!(pytest.args, vec!["-k", "test_name; rm -rf /"]);
+
+        let cargo = build_test_invocation("cargo", Some("my_test"));
+        assert_eq!(cargo.program, "cargo");
+        assert_eq!(cargo.args, vec!["test", "my_test"]);
+
+        let go = build_test_invocation("go", Some("TestThing"));
+        assert_eq!(go.program, "go");
+        assert_eq!(go.args, vec!["test", "./...", "-run", "TestThing"]);
+    }
+
+    #[test]
+    fn discovers_rust_tests_and_skips_target() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("target/debug")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "#[cfg(test)]\nmod tests { #[test] fn works() {} }\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("target/debug/generated.rs"),
+            "#[test] fn nope() {}\n",
+        )
+        .unwrap();
+
+        let discovery = discover_tests(dir.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(discovery.framework, "cargo");
+        assert_eq!(discovery.test_files, vec!["src/lib.rs"]);
+    }
+
+    #[test]
+    fn cargo_parser_sums_multiple_result_lines() {
+        let output = "\
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+";
+
+        let result = parse_test_results(output, "cargo");
+
+        assert_eq!(result.passed, 5);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.total, 6);
+    }
 }

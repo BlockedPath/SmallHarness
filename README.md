@@ -54,7 +54,7 @@ backend so you can start running without picking weights out of a long list.
 | Hardware profiles | `mac-mini-16gb` and `mac-studio-32gb` map to model defaults sized for the box |
 | Hardware-aware recommendation | `/recommend` reads safe local specs and ranks models for coding-agent use |
 | Project memory | `/index` builds and refreshes a safe local repo map; `/map` and `repo_search` help small models find the right files fast |
-| Operator modes | `/mode explore`, `/mode edit`, `/mode ship`, and `/mode review` tune tools, approvals, and step budgets |
+| Operator modes | `/mode explore`, `/mode edit`, `/mode ship`, and `/mode review` tune tools, approvals, and step budgets; ship mode auto-runs smart tests after edits and injects failures into context |
 | Ship preflight | `/shipcheck` summarizes branch drift, dirty files, diff stats, and project-memory freshness before release |
 | Ship handoff | `/handoff` drafts a one-line commit message, changelog bullets, testing note, and X-ready post from local git context |
 | Multi-file operations | `/batch` and `/refactor` enable cross-file reference finding and coordinated multi-file edits with preview |
@@ -62,7 +62,7 @@ backend so you can start running without picking weights out of a long list.
 | Prompt library | `/prompt` saves, lists, runs, and manages prompt templates with built-in library and import/export |
 | Capability cache | `/doctor --deep` and `/bench` persist per-backend/model capability and latency records under `.sessions/capabilities/` |
 | Autotune | `/autotune` scores cached models and can switch the active session to the best local fit |
-| Configurable tools | File read/write/edit, apply-patch, repo-search, glob, grep, list-dir, shell — pick which to enable to control prompt-eval cost |
+| Configurable tools | File read/write/edit, apply-patch, batch-edit, run-tests, ship-status, repo-search, glob, grep, list-dir, shell — pick which to enable to control prompt-eval cost |
 | Approval gates | Per-tool prompts with diff previews, allow-once / allow-this-session / always-allow caching |
 | Robust parsing | Inline JSON-shaped tool-call detector for small models whose templates skip the `tool_calls` field |
 | Pre-warm at startup | Sends a 1-token request with the full system prompt + tools so the cache is hot before your first prompt |
@@ -211,10 +211,14 @@ also exposes newer endpoints.
 | `repo_search` | on | no | Search the local project memory index for ranked files, symbols, and snippets |
 | `file_write` | off | yes | Write/create a file (overwrites) |
 | `glob` | off | no* | Find files by glob pattern |
+| `run_tests` | ship/edit | policy* | Run tests with structured JSON (`discover`, `smart`, `all`, `pattern`) |
+| `batch_edit` | ship | apply only | Preview or apply coordinated multi-file edits (dry-run by default) |
+| `ship_status` | ship | no | Read-only git ship readiness snapshot with optional test run |
 | `shell` | off | yes | Run a shell command, output capped at 256 KB |
 
 `*` Read-only tools prompt when `outsideWorkspace` is `prompt` and the request
-targets a path outside `workspaceRoot`.
+targets a path outside `workspaceRoot`. `run_tests` follows the session
+approval policy (`always` prompts; `dangerous-only` and `never` run silently).
 
 Toggle the active set per session with `/tools`, per shell with the
 `AGENT_TOOLS` env var, or persistently in `agent.config.json`.
@@ -272,6 +276,7 @@ At each prompt you can choose `[y]es`, `[n]o`, `[a]lways for this tool`, or
 | `/remember <text>` | Save a durable local project note |
 | `/forget <id\|all>` | Remove one project note or clear all notes |
 | `/eval [prompt-file] [models]` | Run saved prompts against one or more models with tools off/on |
+| `/eval agent [fixture\|all] [models]` | Run agent-loop benchmarks (`read-and-explain`, `fix-failing-test`, `small-refactor`) and save scored JSON/Markdown under `.sessions/evals/` |
 | `exit` | Quit |
 
 `/doctor --deep` checks the active backend. Add `all` to probe every configured

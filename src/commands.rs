@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::agent::to_openai_tools;
+use crate::agent_eval::{builtin_fixtures, render_agent_eval_markdown, run_agent_eval};
 use crate::backends::{
     backend, default_model, validate, BackendDescriptor, BackendName, ProfileName,
 };
@@ -2605,6 +2606,9 @@ async fn eval_once(
 
 async fn cmd_eval(args: &str, state: &AppState) -> Result<()> {
     let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.first() == Some(&"agent") {
+        return cmd_eval_agent(&parts[1..], state).await;
+    }
     let (prompts, model_specs) = if let Some(first) = parts.first() {
         if Path::new(first).exists() {
             let text = fs::read_to_string(first)?;
@@ -2685,6 +2689,76 @@ async fn cmd_eval(args: &str, state: &AppState) -> Result<()> {
     fs::write(&md_path, md)?;
     println!(
         "  {GREEN}✓{RESET} {DIM}eval saved → {} and {}{RESET}",
+        json_path.display(),
+        md_path.display()
+    );
+    Ok(())
+}
+
+async fn cmd_eval_agent(parts: &[&str], state: &AppState) -> Result<()> {
+    let (fixture_ids, model_specs) = if parts.is_empty() {
+        (
+            vec!["fix-failing-test".to_string()],
+            vec![state.model.clone()],
+        )
+    } else if parts[0] == "all" {
+        let ids = builtin_fixtures()
+            .into_iter()
+            .map(|f| f.id)
+            .collect::<Vec<_>>();
+        let models = if parts.len() > 1 {
+            parts[1].split(',').map(str::to_string).collect()
+        } else {
+            vec![state.model.clone()]
+        };
+        (ids, models)
+    } else {
+        let fixture = parts[0].to_string();
+        let models = if parts.len() > 1 {
+            parts[1].split(',').map(str::to_string).collect()
+        } else {
+            vec![state.model.clone()]
+        };
+        (vec![fixture], models)
+    };
+
+    let eval_dir = Path::new(&state.session_dir).join("evals");
+    fs::create_dir_all(&eval_dir)?;
+    let id = Utc::now().format("%Y-%m-%dT%H-%M-%S-%3fZ").to_string();
+    let mut all_results = Vec::new();
+
+    for spec in model_specs {
+        let (backend_desc, model) = parse_eval_model(&spec, state);
+        validate(&backend_desc)?;
+        for fixture_id in &fixture_ids {
+            let fixture = crate::agent_eval::fixture_by_id(fixture_id)
+                .ok_or_else(|| anyhow!("unknown agent eval fixture: {fixture_id}"))?;
+            println!(
+                "  {DIM}agent eval {} · {} · {}{RESET}",
+                fixture_id,
+                backend_desc.name.as_str(),
+                model
+            );
+            let result = run_agent_eval(&state.config, &backend_desc, &model, &fixture).await?;
+            println!(
+                "  {} {}{RESET}",
+                if result.passed {
+                    format!("{GREEN}✓{RESET}")
+                } else {
+                    format!("{RED}✗{RESET}")
+                },
+                if result.passed { "passed" } else { "failed" }
+            );
+            all_results.push(result);
+        }
+    }
+
+    let json_path = eval_dir.join(format!("agent-{id}.json"));
+    let md_path = eval_dir.join(format!("agent-{id}.md"));
+    fs::write(&json_path, serde_json::to_string_pretty(&all_results)?)?;
+    fs::write(&md_path, render_agent_eval_markdown(&all_results))?;
+    println!(
+        "  {GREEN}✓{RESET} {DIM}agent eval saved → {} and {}{RESET}",
         json_path.display(),
         md_path.display()
     );

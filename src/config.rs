@@ -6,6 +6,7 @@ use crate::backends::BackendName;
 
 pub const ALL_TOOL_NAMES: &[&str] = &[
     "apply_patch",
+    "batch_edit",
     "file_read",
     "file_write",
     "file_edit",
@@ -13,7 +14,9 @@ pub const ALL_TOOL_NAMES: &[&str] = &[
     "grep",
     "list_dir",
     "repo_search",
+    "run_tests",
     "shell",
+    "ship_status",
 ];
 
 pub fn is_tool_name(s: &str) -> bool {
@@ -436,6 +439,7 @@ impl AgentConfig {
                     "list_dir".into(),
                     "repo_search".into(),
                     "apply_patch".into(),
+                    "run_tests".into(),
                 ];
                 self.tool_selection = ToolSelection::Auto;
                 self.approval_policy = ApprovalPolicy::Always;
@@ -452,6 +456,9 @@ impl AgentConfig {
                     "glob".into(),
                     "repo_search".into(),
                     "shell".into(),
+                    "run_tests".into(),
+                    "batch_edit".into(),
+                    "ship_status".into(),
                 ];
                 self.tool_selection = ToolSelection::Auto;
                 self.approval_policy = ApprovalPolicy::DangerousOnly;
@@ -487,9 +494,19 @@ impl AgentConfig {
         } else {
             tools.join(", ")
         };
-        self.system_prompt
+        let mut prompt = self
+            .system_prompt
             .replace("{cwd}", &cwd)
-            .replace("{tools}", &tool_list)
+            .replace("{tools}", &tool_list);
+        if self.mode == OperatorMode::Ship {
+            prompt.push_str(
+                "\n\nShip mode:\n\
+                 - Prefer run_tests over raw shell for test execution.\n\
+                 - Use batch_edit for multi-file coordinated changes.\n\
+                 - Call ship_status before declaring the work done.\n",
+            );
+        }
+        prompt
     }
 
     pub fn history_path(&self) -> String {

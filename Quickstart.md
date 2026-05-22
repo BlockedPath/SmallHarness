@@ -99,7 +99,7 @@ Useful commands:
 
 ```text
 /mode edit    use edit-focused defaults
-/mode ship    enable edit + shell defaults for test/build loops
+/mode ship    enable edit + workflow tools; auto-verify tests after edits
 /shipcheck    show branch drift, dirty files, diff stats, and memory freshness
 /handoff      draft commit, changelog, testing, and X-ready release copy
 /session      show current model, approval policy, session file, and tokens
@@ -217,10 +217,31 @@ Find one small README improvement and propose the exact diff before editing.
 After the edit:
 
 ```text
+/mode ship
+Fix the failing test and get this ready to commit.
+```
+
+In ship mode the harness:
+
+- injects a compact ship-status line into the system prompt each turn
+- exposes `run_tests`, `batch_edit`, and `ship_status` as agent tools
+- after a successful edit turn, runs smart-selected tests and injects failures into the next turn context (no automatic re-run loop)
+
+You can still run the operator commands manually:
+
+```text
 /shipcheck
 /shipcheck export
 /handoff
 /handoff export
+/test smart
+```
+
+Compare local models on agent-loop coding tasks:
+
+```text
+/eval agent fix-failing-test ollama:qwen2.5-coder:7b
+/eval agent all
 ```
 
 Then run:

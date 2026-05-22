@@ -1,8 +1,10 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 
+use crate::config::{AgentConfig, OperatorMode};
 use crate::project_memory::ProjectIndexFreshness;
 use crate::test_integration::{discover_tests, run_tests};
 
@@ -105,6 +107,100 @@ impl ShipcheckSnapshot {
             None => head.to_string(),
         }
     }
+
+    pub fn ready_to_ship(&self) -> bool {
+        if self.conflict_count() > 0 {
+            return false;
+        }
+        if let Some(ref tests) = self.test_status {
+            if tests.failed > 0 || tests.exit_code != 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn to_agent_json(&self) -> AgentShipStatus {
+        AgentShipStatus {
+            branch: self.branch_label(),
+            staged_files: self.staged_count(),
+            unstaged_files: self.unstaged_count(),
+            untracked_files: self.untracked_count(),
+            conflicts: self.conflict_count(),
+            staged_diff_stat: self.staged_diff_stat.clone(),
+            unstaged_diff_stat: self.unstaged_diff_stat.clone(),
+            test_status: self.test_status.as_ref().map(|t| AgentTestStatusSummary {
+                framework: t.framework.clone(),
+                total: t.total,
+                passed: t.passed,
+                failed: t.failed,
+                skipped: t.skipped,
+                exit_code: t.exit_code,
+                error: t.error.clone(),
+            }),
+            ready_to_ship: self.ready_to_ship(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentShipStatus {
+    pub branch: String,
+    pub staged_files: usize,
+    pub unstaged_files: usize,
+    pub untracked_files: usize,
+    pub conflicts: usize,
+    pub staged_diff_stat: String,
+    pub unstaged_diff_stat: String,
+    pub test_status: Option<AgentTestStatusSummary>,
+    pub ready_to_ship: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTestStatusSummary {
+    pub framework: String,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub exit_code: i32,
+    pub error: Option<String>,
+}
+
+pub fn ship_status_one_liner(snapshot: &ShipcheckSnapshot, tests_ran_this_session: bool) -> String {
+    let tests_note = if tests_ran_this_session {
+        "tests ran this session"
+    } else {
+        "tests not run this session"
+    };
+    format!(
+        "Ship status: branch {}, {} unstaged file(s), {} staged, {tests_note}",
+        snapshot.branch_label(),
+        snapshot.unstaged_count(),
+        snapshot.staged_count(),
+    )
+}
+
+pub fn append_ship_context(
+    base: &str,
+    config: &AgentConfig,
+    tests_ran_this_session: bool,
+) -> String {
+    if config.mode != OperatorMode::Ship {
+        return base.to_string();
+    }
+    let Ok(snapshot) = collect_shipcheck(&config.workspace_root) else {
+        return base.to_string();
+    };
+    let line = ship_status_one_liner(&snapshot, tests_ran_this_session);
+    let capped = if line.len() > 512 {
+        format!("{}…", &line[..509])
+    } else {
+        line
+    };
+    format!("{base}\n\n{capped}")
 }
 
 pub fn collect_shipcheck(workspace_root: &str) -> Result<ShipcheckSnapshot> {
@@ -548,6 +644,70 @@ u UU N... 100644 100644 100644 100644 a b c src/conflict.rs
         assert!(md.contains("- Staged files: 1"));
         assert!(md.contains("src/main.rs | 1 +"));
         assert!(md.contains("- Fresh: 1"));
+    }
+
+    #[test]
+    fn ready_to_ship_respects_conflicts_and_tests() {
+        let mut snapshot = ShipcheckSnapshot {
+            workspace_root: ".".to_string(),
+            git_root: ".".to_string(),
+            branch: GitBranchState::default(),
+            files: vec![GitFileState {
+                path: "src/conflict.rs".to_string(),
+                original_path: None,
+                staged: None,
+                unstaged: None,
+                kind: GitFileKind::Conflict,
+            }],
+            staged_diff_stat: String::new(),
+            unstaged_diff_stat: String::new(),
+            test_status: None,
+        };
+        assert!(!snapshot.ready_to_ship());
+        snapshot.files.clear();
+        snapshot.test_status = Some(TestStatus {
+            framework: "cargo".into(),
+            total: 1,
+            passed: 0,
+            failed: 1,
+            skipped: 0,
+            exit_code: 1,
+            error: None,
+        });
+        assert!(!snapshot.ready_to_ship());
+        snapshot.test_status = Some(TestStatus {
+            framework: "cargo".into(),
+            total: 1,
+            passed: 1,
+            failed: 0,
+            skipped: 0,
+            exit_code: 0,
+            error: None,
+        });
+        assert!(snapshot.ready_to_ship());
+    }
+
+    #[test]
+    fn to_agent_json_serializes_summary() {
+        let snapshot = ShipcheckSnapshot {
+            workspace_root: "/repo".to_string(),
+            git_root: "/repo".to_string(),
+            branch: GitBranchState {
+                head: Some("main".to_string()),
+                upstream: Some("origin/main".to_string()),
+                ahead: 1,
+                behind: 0,
+                oid: Some("abc".to_string()),
+            },
+            files: vec![],
+            staged_diff_stat: " src/main.rs | 1 +".to_string(),
+            unstaged_diff_stat: String::new(),
+            test_status: None,
+        };
+        let json = snapshot.to_agent_json();
+        assert_eq!(json.branch, "main -> origin/main (+1/-0)");
+        assert!(json.ready_to_ship);
+        assert_eq!(json.staged_files, 0);
     }
 
     #[test]

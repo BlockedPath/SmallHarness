@@ -1,0 +1,8 @@
+[package]
+name = "small-refactor"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "small-refactor"
+path = "src/main.rs"

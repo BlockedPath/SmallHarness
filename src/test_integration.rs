@@ -26,6 +26,52 @@ pub struct TestResult {
     pub output: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTestResult {
+    pub framework: String,
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub exit_code: i32,
+    pub failures: Vec<String>,
+    pub output_excerpt: String,
+}
+
+pub fn test_result_to_agent_json(framework: &str, result: &TestResult) -> AgentTestResult {
+    const MAX_EXCERPT: usize = 2000;
+    let output_excerpt = if result.output.chars().count() <= MAX_EXCERPT {
+        result.output.clone()
+    } else {
+        let mut out: String = result.output.chars().take(MAX_EXCERPT).collect();
+        out.push_str("…[truncated]");
+        out
+    };
+    AgentTestResult {
+        framework: framework.to_string(),
+        total: result.total,
+        passed: result.passed,
+        failed: result.failed,
+        skipped: result.skipped,
+        exit_code: result.exit_code,
+        failures: result.failures.clone(),
+        output_excerpt,
+    }
+}
+
+pub fn format_test_failure_feedback(result: &TestResult) -> String {
+    let failures = if result.failures.is_empty() {
+        result.output.chars().take(1500).collect::<String>()
+    } else {
+        result.failures.join("\n")
+    };
+    format!(
+        "[Auto-verify after edits] {} test(s) failed ({} passed).\nFailures:\n{failures}",
+        result.failed, result.passed
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestInvocation {
     pub program: String,
@@ -505,21 +551,35 @@ fn extract_number(line: &str, keyword: &str) -> Option<usize> {
 pub fn smart_test_selection(workspace_root: &str) -> Result<Vec<String>> {
     let root = Path::new(workspace_root);
 
-    let output = Command::new("git")
+    let diff_output = Command::new("git")
         .args(["diff", "--name-only", "HEAD"])
         .current_dir(root)
         .output()?;
 
-    if !output.status.success() {
+    if !diff_output.status.success() {
         let discovery = discover_tests(workspace_root)?;
         return Ok(discovery.test_files);
     }
 
-    let changed_files: Vec<String> = String::from_utf8_lossy(&output.stdout)
+    let mut changed_files: Vec<String> = String::from_utf8_lossy(&diff_output.stdout)
         .lines()
         .filter(|line| !line.is_empty())
         .map(|s| s.to_string())
         .collect();
+    let untracked_output = Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(root)
+        .output()?;
+    if untracked_output.status.success() {
+        for line in String::from_utf8_lossy(&untracked_output.stdout)
+            .lines()
+            .filter(|line| !line.is_empty())
+        {
+            if !changed_files.iter().any(|path| path == line) {
+                changed_files.push(line.to_string());
+            }
+        }
+    }
 
     if changed_files.is_empty() {
         return Ok(vec![]);
@@ -666,5 +726,50 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
         assert_eq!(result.passed, 5);
         assert_eq!(result.skipped, 1);
         assert_eq!(result.total, 6);
+    }
+
+    #[test]
+    fn smart_selection_includes_untracked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("tests")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname=\"x\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn existing() {}\n").unwrap();
+        fs::write(
+            dir.path().join("tests/new_feature.rs"),
+            "#[test] fn new_feature_works() {}\n",
+        )
+        .unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["add", "Cargo.toml", "src/lib.rs"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args([
+                "-c",
+                "user.name=Small Harness",
+                "-c",
+                "user.email=small-harness@example.invalid",
+                "commit",
+                "-m",
+                "baseline",
+            ])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let selected = smart_test_selection(dir.path().to_str().unwrap()).unwrap();
+
+        assert!(selected.contains(&"tests/new_feature.rs".to_string()));
     }
 }

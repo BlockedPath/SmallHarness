@@ -1,4 +1,5 @@
 mod agent;
+mod agent_eval;
 mod approval;
 mod backends;
 mod banner;
@@ -34,7 +35,7 @@ use crate::backends::{backend, default_model, validate, BackendDescriptor};
 use crate::banner::{print_banner, BannerInfo};
 use crate::cancel::CancellationToken;
 use crate::commands::{dispatch, AppState};
-use crate::config::{load_config, InputStyle};
+use crate::config::{load_config, InputStyle, OperatorMode};
 use crate::context_guard::{
     maybe_auto_compact, merge_system_prompt, rewrite_session_transcript, CompactSessionContext,
 };
@@ -47,6 +48,10 @@ use crate::project_memory::{
 };
 use crate::renderer::TuiRenderer;
 use crate::session::{init_session_dir, new_session_path, save_message};
+use crate::shipcheck::{append_ship_context, collect_shipcheck};
+use crate::test_integration::{
+    format_test_failure_feedback, run_selected_tests, smart_test_selection,
+};
 use crate::tools::{build_tools_for_names, select_tool_names};
 use crate::warmup::warmup;
 
@@ -351,6 +356,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut approval_cache = ApprovalCache::new();
     let mut renderer = TuiRenderer::new(state.config.display.clone());
+    let mut tests_ran_this_session = false;
 
     loop {
         let input = match state.config.display.input_style {
@@ -405,11 +411,15 @@ async fn main() -> anyhow::Result<()> {
         }
 
         let active_tool_names = select_tool_names(&state.config, trimmed);
-        let base_system_prompt = render_system_prompt_with_memory(
+        let base_system_prompt = append_ship_context(
+            &render_system_prompt_with_memory(
+                &state.config,
+                &state.backend,
+                &active_tool_names,
+                trimmed,
+            ),
             &state.config,
-            &state.backend,
-            &active_tool_names,
-            trimmed,
+            tests_ran_this_session,
         );
         let mut system_prompt =
             merge_system_prompt(&base_system_prompt, state.conversation_summary.as_deref());
@@ -552,8 +562,18 @@ async fn main() -> anyhow::Result<()> {
                     l.stop();
                 }
                 if let AgentEvent::ToolResult { name, output, .. } = &e {
-                    if matches!(name.as_str(), "file_write" | "file_edit" | "apply_patch")
-                        && !output.contains("\"error\"")
+                    let output_json = serde_json::from_str::<serde_json::Value>(output).ok();
+                    let has_error = output_json.as_ref().and_then(|v| v.get("error")).is_some()
+                        || output.contains("\"error\"");
+                    let applied_batch_edit = name == "batch_edit"
+                        && output_json
+                            .as_ref()
+                            .and_then(|v| v.get("applied"))
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                    if !has_error
+                        && (matches!(name.as_str(), "file_write" | "file_edit" | "apply_patch")
+                            || applied_batch_edit)
                     {
                         memory_changed = true;
                     }
@@ -612,6 +632,39 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => println!(
                             "  {YELLOW}!{RESET} {DIM}project memory refresh skipped: {e}{RESET}"
                         ),
+                    }
+                    if state.config.mode == OperatorMode::Ship {
+                        if let Ok(selected) = smart_test_selection(&state.config.workspace_root) {
+                            if !selected.is_empty() {
+                                match run_selected_tests(&state.config.workspace_root, &selected) {
+                                    Ok(result) => {
+                                        tests_ran_this_session = true;
+                                        if result.failed > 0 || result.exit_code != 0 {
+                                            let feedback = format_test_failure_feedback(&result);
+                                            let verify_msg =
+                                                ChatMessage::User { content: feedback };
+                                            state.messages.push(verify_msg.clone());
+                                            let _ = save_message(&state.session_path, &verify_msg);
+                                            println!(
+                                                "  {YELLOW}tests:{RESET} {} failed (see context)",
+                                                result.failed
+                                            );
+                                        } else if let Ok(snapshot) =
+                                            collect_shipcheck(&state.config.workspace_root)
+                                        {
+                                            if snapshot.ready_to_ship() {
+                                                println!(
+                                                    "  {GREEN}✓{RESET} {DIM}ready for /handoff{RESET}"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => println!(
+                                        "  {YELLOW}!{RESET} {DIM}auto-verify skipped: {e}{RESET}"
+                                    ),
+                                }
+                            }
+                        }
                     }
                 }
                 println!(

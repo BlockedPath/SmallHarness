@@ -6,6 +6,7 @@ use crate::cancel::CancellationToken;
 use crate::config::{AgentConfig, ApprovalPolicy, ToolSelection};
 
 mod apply_patch_tool;
+mod batch_edit;
 mod diff;
 mod file_edit;
 mod file_read;
@@ -15,9 +16,12 @@ mod grep;
 mod list_dir;
 mod path_policy;
 mod repo_search;
+mod run_tests;
 mod shell;
+mod ship_status;
 
 pub use apply_patch_tool::ApplyPatchTool;
+pub use batch_edit::BatchEditTool;
 pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
@@ -26,7 +30,9 @@ pub use grep::GrepTool;
 pub use list_dir::ListDirTool;
 pub use path_policy::PathPolicy;
 pub use repo_search::RepoSearchTool;
+pub use run_tests::RunTestsTool;
 pub use shell::ShellTool;
+pub use ship_status::ShipStatusTool;
 
 #[derive(Debug, Clone)]
 pub struct ToolPreview {
@@ -112,6 +118,29 @@ pub fn select_tool_names(config: &AgentConfig, prompt: &str) -> Vec<String> {
     ]
     .iter()
     .any(|needle| lower.contains(needle));
+    let testish = ["failing", "verify", "unit test", "test suite"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+        || (lower.contains("test") && !lower.contains("latest"));
+    let shipish = [
+        "ship",
+        "ready to commit",
+        "ready to ship",
+        "shipcheck",
+        "handoff",
+        "release",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    let batchish = [
+        "multi-file",
+        "multiple files",
+        "across files",
+        "batch edit",
+        "coordinated",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
 
     let mut out = Vec::new();
     if fileish || editish {
@@ -130,6 +159,15 @@ pub fn select_tool_names(config: &AgentConfig, prompt: &str) -> Vec<String> {
     }
     if shellish {
         push_if_enabled(&mut out, config, "shell");
+    }
+    if testish || shellish {
+        push_if_enabled(&mut out, config, "run_tests");
+    }
+    if batchish && editish {
+        push_if_enabled(&mut out, config, "batch_edit");
+    }
+    if shipish {
+        push_if_enabled(&mut out, config, "ship_status");
     }
     out
 }
@@ -170,6 +208,16 @@ pub fn build_tools_for_names(config: &AgentConfig, names: &[String]) -> Vec<Arc<
             "shell" => Some(Arc::new(ShellTool {
                 policy: config.approval_policy,
                 path_policy: path_policy.clone(),
+            })),
+            "run_tests" => Some(Arc::new(RunTestsTool {
+                workspace_root: config.workspace_root.clone(),
+                policy: config.approval_policy,
+            })),
+            "batch_edit" => Some(Arc::new(BatchEditTool {
+                workspace_root: config.workspace_root.clone(),
+            })),
+            "ship_status" => Some(Arc::new(ShipStatusTool {
+                workspace_root: config.workspace_root.clone(),
             })),
             _ => None,
         };
@@ -225,11 +273,22 @@ mod tests {
     }
 
     #[test]
-    fn fixed_mode_uses_enabled_pool() {
+    fn auto_verify_prompt_includes_run_tests() {
         let config = AgentConfig {
-            tool_selection: ToolSelection::Fixed,
+            tools: vec!["run_tests".into(), "file_read".into(), "file_edit".into()],
             ..Default::default()
         };
-        assert_eq!(select_tool_names(&config, "hello"), config.tools);
+        let names = select_tool_names(&config, "verify the failing unit test");
+        assert!(names.contains(&"run_tests".to_string()));
+    }
+
+    #[test]
+    fn auto_ship_prompt_includes_ship_status() {
+        let config = AgentConfig {
+            tools: vec!["ship_status".into(), "file_read".into()],
+            ..Default::default()
+        };
+        let names = select_tool_names(&config, "is this ready to ship?");
+        assert!(names.contains(&"ship_status".to_string()));
     }
 }

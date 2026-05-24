@@ -3,28 +3,83 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Small Harness currently uses the `0.2.x` product line for focused feature and
-fix releases.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-24
+
+A polish + capability pass. Direct OpenAI provider, per-turn cost on the
+status line, persistent credential store, an MCP client, image input,
+`web_fetch`, a per-project system prompt, `--continue`, completions, a
+GitHub release check, redacted crash logs, and a notarization-ready
+release workflow with a Homebrew formula template.
+
 ### Added
 
-- Interactive playground: `/play` runs bundled agent demos in an isolated sandbox with scorecards; `/play battle` compares local models; `/play exit` restores workspace
-- Fix-until-green loop: `/fix` retries agent turns until tests pass (`--attempts`, `--yolo`, smart or full test selection)
-- Shared session turn runner (`session_turn.rs`) used by the REPL, `/play`, and `/fix`
-- New eval/play fixture: `add-feature` (add `mul` function + test)
-- Agent workflow tools: `run_tests`, `batch_edit`, and `ship_status` wrap `/test`, `/batch`, and `/shipcheck` for structured tool calls in ship and edit modes
-- Ship loop autopilot: `/mode ship` auto-runs smart-selected tests after edit turns and injects failure summaries into session context; ship-status one-liner in the system prompt
-- Agent eval suite: `/eval agent [fixture|all] [models]` runs `run_agent` benchmarks with scored JSON/Markdown reports under `.sessions/evals/` (fixtures: `read-and-explain`, `fix-failing-test`, `small-refactor`)
-- Turn checkpoints: lazy per-file snapshots before mutating tools; `/undo` reverts the last agent turn's file changes; `/checkpoints` to toggle or inspect
-- Multi-file operations with `/batch` and `/refactor` commands for cross-file reference finding and coordinated edits
-- Test integration with `/test` command for test discovery, execution, and smart selection based on changed files
-- Prompt library with `/prompt` command for saving, listing, running, and managing prompt templates
-- Built-in prompt library with templates for code review, debug, refactor, document, explain, and test tasks
-- Test status integration in `/shipcheck` with `--tests` flag to run tests during preflight checks
-- Prompt import/export functionality for sharing prompt libraries across projects
-- Adaptive Context Guard: model-aware effective limits, auto-compaction before overflow (local backends), deterministic trim fallback, and expanded `/context` reporting
+- Direct OpenAI backend (`BackendName::OpenAi`, default model `gpt-4o-mini`,
+  `OPENAI_API_KEY` / optional `OPENAI_BASE_URL`). `BackendName::is_local()`
+  generalizes the cloud check so handoff refusal, recommend filtering, and
+  capability scoring stay correct as cloud backends are added.
+- Per-model catalog (`src/catalog.rs`) with context window and input/output
+  USD-per-Mtoken for OpenAI's GPT-4o family, o-series, GPT-4, GPT-3.5.
+  Lookup does exact-match then longest-prefix so versioned ids like
+  `gpt-4o-2024-11-20` resolve to `gpt-4o`. `/model` picker shows
+  `128k ctx · $0.15/$0.60 per Mtoken` alongside each id.
+- Session cost tracker: end-of-turn status line shows `$0.003 this turn ·
+  $0.41 session` on cloud backends. Local turns show tokens only. Sessions
+  that mix cloud and uncataloged turns prefix the total with `≥` to mark
+  it as a lower bound.
+- `/auth` command + persistent credential store at
+  `~/.config/small-harness/auth.json` (mode `0600`, masked display, env
+  vars win at lookup time).
+- `/image <path>` attaches images to the next user turn via OpenAI's
+  multi-part content format. New `UserContent` enum is `#[serde(untagged)]`
+  so plain text turns keep the existing wire shape. Catalog now tracks
+  `vision: bool` per model.
+- MCP client (`src/mcp.rs`) over stdio JSON-RPC with
+  `initialize`/`tools/list`/`tools/call`. Servers configured under
+  `mcpServers` in `agent.config.json` are spawned at startup and their
+  tools surface as `mcp__<server>__<tool>`, approval-gated by default.
+- `web_fetch` tool — approval-gated, HTML-stripped to text, byte-capped.
+- Per-project system prompt: drop `.small-harness/prompt.md` at the repo
+  root and Small Harness prepends it (auto-truncated at 8 KB).
+- `small-harness --continue` (or `-c`) resumes the most recent session in
+  the cwd without picking from a list.
+- Background GitHub release check with a 24h cache; one-line banner notice
+  if a newer version exists. Opt out with `SMALL_HARNESS_NO_UPDATE_CHECK`.
+- Crash log: panic hook writes a redacted log (API keys scrubbed) to
+  `.sessions/crashes/<timestamp>.log` and prints the path.
+- `small-harness completions bash|zsh|fish` emits shell completion
+  scripts.
+- `/reasoning on|off|status` toggles the streaming reasoning panel with a
+  proper "thinking…" header.
+- GitHub Actions release workflow at `.github/workflows/release.yml` —
+  tag-push triggered, dual-arch macOS build, optional sign + notarize when
+  Apple Developer secrets are present, GitHub release with SHA256SUMS.
+- Homebrew formula template at `packaging/homebrew/small-harness.rb`
+  targeting that workflow's artifacts, ready to drop into a
+  `getsmallai/homebrew-tap` repo.
+
+### Changed
+
+- Refactored `BackendName::Openrouter`-as-cloud checks in `handoff.rs`,
+  `recommend.rs`, `capabilities.rs`, and `commands.rs` to route through
+  `BackendName::is_local()` instead.
+- `/new` now resets `total_in`, `total_out`, `session_usd`, and the
+  uncataloged-cost flag so a fresh session genuinely starts fresh.
+- Tagline and masthead updated: "A small, terminal-first coding harness —
+  bring your own model, your own key, or your own MCP server." README
+  fully restructured around install → first session → reference flow.
+
+## [0.2.x predecessors]
+
+Earlier `0.2.x` work that landed before 0.3.0 includes: interactive
+`/play` playground with bundled demos and scorecards, `/fix` fix-until-green
+loop, shared `session_turn.rs` runner, agent workflow tools (`run_tests`,
+`batch_edit`, `ship_status`), `/mode ship` autopilot, agent eval suite,
+turn checkpoints with `/undo`, multi-file `/batch` and `/refactor`, the
+`/test` command, the `/prompt` template library, and the adaptive context
+guard with auto-compaction.
 
 ## [0.2.2] - 2026-05-03
 

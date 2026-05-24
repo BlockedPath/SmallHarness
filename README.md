@@ -5,118 +5,67 @@
 <h1 align="center">Small Harness</h1>
 
 <p align="center">
-  <strong>A TUI agent harness for small LLMs running on your Mac</strong>
+  <strong>A small, terminal-first coding harness. Bring your own model, your own key, or your own MCP server.</strong>
 </p>
 
 <p align="center">
-  <a href="#quick-install">Quick Install</a> &middot;
-  <a href="Quickstart.md">Quickstart</a> &middot;
-  <a href="#getting-started">Getting Started</a> &middot;
-  <a href="#features">Features</a> &middot;
+  <a href="#install">Install</a> &middot;
+  <a href="#first-session">First session</a> &middot;
   <a href="#backends">Backends</a> &middot;
-  <a href="#tools">Tools</a> &middot;
-  <a href="#slash-commands">Slash Commands</a> &middot;
+  <a href="#tools-and-commands">Tools &amp; commands</a> &middot;
+  <a href="#cost-and-credentials">Cost &amp; credentials</a> &middot;
+  <a href="#going-further">Going further</a> &middot;
   <a href="#configuration">Configuration</a> &middot;
-  <a href="#development">Development</a>
+  <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/GetSmallAI/SmallHarness/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/GetSmallAI/SmallHarness/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.75%2B-dea584">
-  <img alt="Version" src="https://img.shields.io/badge/version-0.2.2-111827">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.3.0-111827">
   <img alt="Backends" src="https://img.shields.io/badge/backends-Ollama%20%7C%20LM%20Studio%20%7C%20MLX%20%7C%20llama.cpp%20%7C%20OpenRouter%20%7C%20OpenAI-2563eb">
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-optimized-111827">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827">
 </p>
 
-## What Is Small Harness?
+---
 
-Small Harness is a terminal-based agent harness for running small open-weight
-LLMs locally on consumer Macs. It points the same TUI at six different
-inference backends: [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai),
-MLX, [llama.cpp](https://github.com/ggml-org/llama.cpp),
-[OpenRouter](https://openrouter.ai), or [OpenAI](https://platform.openai.com)
-direct. The harness gives the model a focused set of filesystem and shell
-tools, and gates dangerous operations behind an approval prompt.
+## What it is
 
-It is built for developers who want to use a 7B–14B model as an interactive
-coding assistant without depending on a cloud API. Hardware profiles for the
-Mac mini (16 GB) and Mac Studio (32 GB) pick sensible default models per
-backend so you can start running without picking weights out of a long list.
+A coding agent that lives in your terminal. It points at local models
+(Ollama, LM Studio, MLX, llama.cpp) or hits OpenAI / OpenRouter directly
+with your own key. It ships with the usual tool kit — read, edit, grep,
+shell, run tests — plus a few that aren't usual:
 
-**Try it in 60 seconds:** run `/play fix-failing-test` to watch your local model
-fix a bundled failing test — then `/fix` on your own repo.
+- **Six backends, one TUI.** Switch with `/backend openai`, `/backend ollama`,
+  whatever. Same tools, same commands, same session log.
+- **Per-turn cost on the status line.** `$0.003 this turn · $0.41 session`
+  when you're on a cloud backend with a cataloged model. Local turns just
+  show tokens.
+- **Real undo.** `/undo` reverts the last agent turn's file mutations,
+  including files the agent created or files that weren't tracked when the
+  turn started.
+- **MCP-native.** Drop servers into `mcpServers` in your config; their tools
+  show up as `mcp__<server>__<tool>` to the model on next launch.
+- **`/auth` instead of `.env`.** Paste API keys once into a `0600` file
+  under `~/.config/small-harness/`. Env vars still win when set.
+- **Approval gates you can live with.** Every mutating call shows you the
+  diff first, with `allow once / allow session / always allow` caching.
 
-## Features
+---
 
-| Area | What you get |
-| --- | --- |
-| First-run setup | Interactive wizard writes `agent.config.json`, picks backend/profile/model, chooses approval/tool mode, and probes the backend |
-| Local-first | OpenAI-compatible chat completions against Ollama, LM Studio, MLX, or llama.cpp, all selectable at runtime |
-| Cloud comparison | One-key A/B against any OpenRouter model with `/compare` |
-| Hardware profiles | `mac-mini-16gb` and `mac-studio-32gb` map to model defaults sized for the box |
-| Hardware-aware recommendation | `/recommend` reads safe local specs and ranks models for coding-agent use |
-| Project memory | `/index` builds and refreshes a safe local repo map; `/map` and `repo_search` help small models find the right files fast |
-| Operator modes | `/mode explore`, `/mode edit`, `/mode ship`, and `/mode review` tune tools, approvals, and step budgets; ship mode auto-runs smart tests after edits and injects failures into context |
-| Interactive playground | `/play` runs bundled demos (fix failing tests, add a feature, refactor) in an isolated sandbox with a scorecard; `/play battle` compares local models; `/play exit` restores your workspace |
-| Fix loop | `/fix` runs a fix-until-green loop on your repo (smart test selection, `--attempts`, `--yolo`) |
-| Turn checkpoints | Lazy per-file snapshots before mutating tools; `/undo` reverts the last agent turn's file changes (enabled by default in edit/ship modes) |
-| Ship preflight | `/shipcheck` summarizes branch drift, dirty files, diff stats, and project-memory freshness before release |
-| Ship handoff | `/handoff` drafts a one-line commit message, changelog bullets, testing note, and X-ready post from local git context |
-| Multi-file operations | `/batch` and `/refactor` enable cross-file reference finding and coordinated multi-file edits with preview |
-| Test integration | `/test` discovers, runs, and analyzes tests with smart selection based on changed files |
-| Prompt library | `/prompt` saves, lists, runs, and manages prompt templates with built-in library and import/export |
-| Capability cache | `/doctor --deep` and `/bench` persist per-backend/model capability and latency records under `.sessions/capabilities/` |
-| Autotune | `/autotune` scores cached models and can switch the active session to the best local fit |
-| Configurable tools | File read/write/edit, apply-patch, batch-edit, run-tests, ship-status, repo-search, glob, grep, list-dir, shell — pick which to enable to control prompt-eval cost |
-| Approval gates | Per-tool prompts with diff previews, allow-once / allow-this-session / always-allow caching |
-| Robust parsing | Inline JSON-shaped tool-call detector for small models whose templates skip the `tool_calls` field |
-| Pre-warm at startup | Sends a 1-token request with the full system prompt + tools so the cache is hot before your first prompt |
-| Efficiency mode | Auto-selects tool schemas per prompt, shows prompt-budget breakdowns, and compacts large tool outputs |
-| Streaming output | Tokens stream as they arrive, with grouped tool-call display and optional reasoning deltas |
-| Session persistence | JSONL append-only session logs with titles, search, resume, delete, prune, and export commands |
-| One-shot mode | `small-harness --print "prompt"` or piped stdin for scripts and CI |
-| Slash commands | `/setup`, `/mode`, `/play`, `/fix`, `/shipcheck`, `/handoff`, `/batch`, `/refactor`, `/test`, `/prompt`, `/backend`, `/profile`, `/model`, `/tools`, `/index`, `/map`, `/memory`, `/remember`, `/forget`, `/compare`, `/session`, `/sessions`, `/resume`, `/export`, `/doctor`, `/bench`, `/capabilities`, `/autotune`, `/recommend`, `/eval`, `/undo`, `/new`, `/help` |
-| Bordered TUI | Clean terminal box input with persisted history, arrow recall, and Ctrl-J multi-line prompts |
-
-## Quick Install
-
-Once a tagged release is published, the fastest path is Homebrew via the
-project tap (see [packaging/homebrew/small-harness.rb](packaging/homebrew/small-harness.rb)
-for the formula template):
+## Install
 
 ```bash
+# Pre-built binary (once tagged releases are published)
 brew install getsmallai/tap/small-harness
-```
 
-From source (requires Rust stable 1.75+) and one local-inference backend:
-
-```bash
+# Or from source — Rust 1.75+
 git clone https://github.com/GetSmallAI/SmallHarness.git
-cd SmallHarness
-cp .env.example .env
-cargo run --release
+cd SmallHarness && cargo run --release
 ```
 
-Build a standalone binary with `cargo build --release` — it lands at
-`target/release/small-harness` (~5 MB).
-
-For a guided first session, read [Quickstart.md](Quickstart.md).
-
-By default Small Harness talks to Ollama at `http://localhost:11434/v1`. To
-target LM Studio, MLX, or llama.cpp instead, set `BACKEND=lm-studio`,
-`BACKEND=mlx`, or `BACKEND=llamacpp` before running, or use `/backend` once
-the harness is running.
-
-If `agent.config.json` does not exist, the first run opens a short setup
-wizard that writes one for you and probes the selected backend. Set
-`SMALL_HARNESS_NO_WIZARD=true` to skip the wizard and use env/defaults only.
-
-## Getting Started
-
-### 1. Install a backend
-
-Pick one. Ollama is the fastest path on a fresh box:
+You also need a backend. Easiest is Ollama:
 
 ```bash
 brew install ollama
@@ -124,326 +73,322 @@ brew services start ollama
 ollama pull qwen2.5-coder:7b
 ```
 
-LM Studio (already installed), MLX, and llama.cpp are also supported. See
-[Backends](#backends) for ports and setup notes.
+LM Studio, MLX, llama.cpp, OpenRouter cloud, and direct OpenAI are equally
+supported — see [Backends](#backends) for ports and notes.
 
-### 2. Run the harness
+On first launch a short wizard writes `agent.config.json`, picks defaults
+for your hardware, and probes the backend. Skip it with
+`SMALL_HARNESS_NO_WIZARD=true`.
 
-```bash
-cargo run --release
-```
+---
 
-On a fresh checkout, the setup wizard asks for backend, hardware profile,
-optional model override, approval policy, and adaptive/fixed tool mode, then
-writes `agent.config.json`. After setup, you will see the banner, a backend
-probe, and a "Warming up" spinner that populates the prompt-eval cache so the
-first prompt isn't slow. When the input box opens, type a question:
+## First session
 
-```
+```text
 > what files are in src/?
+
+  Listed src/  (24 files)
+
+src/ has 24 Rust files: main.rs is the entry point (input loop, banner,
+warmup); agent.rs runs the chat-completions loop; backends.rs handles the
+six providers; tools/ contains the tool implementations…
+
+  1.2k in · 87 out · $0.0003 this turn · $0.0003 session
+
+> add a function in src/util.rs that lowercases a string and trims it
+
+  Read src/util.rs
+  Edited src/util.rs
+
+  --- src/util.rs
+  +++ src/util.rs
+  @@ ...
+  +pub fn normalize(input: &str) -> String {
+  +    input.trim().to_lowercase()
+  +}
+
+  Apply? [y/n/a]: y
+  checkpoint saved (1 file) — /undo to revert
+  3.4k in · 412 out · $0.001 this turn · $0.0013 session
 ```
 
-### 3. Switch backends, profiles, and models on the fly
+A handful of moves worth knowing right away:
 
-```
-/backend lm-studio        switch to LM Studio
-/backend llamacpp         switch to llama.cpp
-/setup                    rerun setup and rewrite agent.config.json
-/mode explore             use read/search-only defaults
-/mode ship                enable edit + shell with dangerous approvals
-/shipcheck                summarize branch, diff, and memory readiness
-/handoff                  draft commit, changelog, testing, and X-ready copy
-/profile mac-studio-32gb  switch the hardware profile (changes default model)
-/model                    list models from the current backend and pick one
-/tools                    show enabled tools and auto/fixed selection mode
-/compare                  run the same prompt against OpenRouter cloud
-/sessions                 list titled JSONL sessions
-/sessions search config   search saved sessions
-/resume latest            resume the newest saved session
-/doctor                   check backend, config, rg, and session storage
-/doctor --deep            probe stream, usage, and tool-call capabilities
-/capabilities             show cached backend/model capability scores
-/autotune                 recommend the best cached local model
-/recommend                recommend a model from hardware + installed models
-/index                    build or show the local project memory index
-/index status             show fresh/stale/missing/deleted index counts
-/map                      print a repo map or focused project-memory hits
-```
+- `/mode explore | edit | ship | review` toggles tool + approval + step-budget
+  presets.
+- `/undo` reverts the last turn's file mutations.
+- `/shipcheck` summarizes git state; `/handoff` drafts a commit message,
+  changelog bullets, and a release post from local context.
+- `/play fix-failing-test` runs a bundled demo in an isolated sandbox so you
+  can try a real agent loop without touching your repo.
+- `Ctrl-J` for newline; `Enter` submits.
+- `small-harness --continue` resumes the most recent session in the cwd.
 
-### 4. Adjust the tool set for speed
-
-Each tool definition costs prompt-eval time on small local models. Small
-Harness defaults to `toolSelection: "auto"`, so ordinary chat sends no tool
-schemas, file/code questions send read/search/list schemas, edit requests add
-edit/patch schemas, and shell-ish prompts add `shell` when it is enabled.
-The `tools` list is the allowed pool:
-
-```
-/tools auto                    adaptive tool selection (default)
-/tools fixed                   always send every enabled tool schema
-/tools file_read,grep,list_dir
-/tools auto file_read,grep,list_dir
-```
-
-Or set persistently in `agent.config.json`:
-
-```json
-{ "tools": ["file_read", "file_edit", "grep", "list_dir", "repo_search"] }
-```
+---
 
 ## Backends
 
-| Backend | Default URL | API style | Best for |
-| --- | --- | --- | --- |
-| `ollama` | `http://localhost:11434/v1` | OpenAI-compatible | Easiest setup; mature tool-call templates; CLI model management |
-| `lm-studio` | `http://localhost:1234/v1` | OpenAI-compatible | GUI model browser; explicit load/unload controls |
-| `mlx` | `http://localhost:8080/v1` | OpenAI-compatible (via `mlx_lm.server`) | Fastest inference on Apple Silicon |
-| `llamacpp` | `http://localhost:8080/v1` | OpenAI-compatible (via `llama-server`) | Direct GGUF serving; fastest path if you already use llama.cpp |
-| `openrouter` | `https://openrouter.ai/api/v1` | OpenAI-compatible | Cloud A/B comparison; access to larger frontier models |
-| `openai` | `https://api.openai.com/v1` | OpenAI-native | Direct provider access using your own API key |
+| Backend | Default URL | Notes |
+|---------|-------------|-------|
+| `ollama` | `http://localhost:11434/v1` | Easiest setup; mature tool-call templates |
+| `lm-studio` | `http://localhost:1234/v1` | GUI model browser; explicit load / unload |
+| `mlx` | `http://localhost:8080/v1` | Fastest inference on Apple Silicon (via `mlx_lm.server`) |
+| `llamacpp` | `http://localhost:8080/v1` | Direct GGUF serving (via `llama-server`) |
+| `openrouter` | `https://openrouter.ai/api/v1` | Cloud A/B with `/compare`; access to frontier models |
+| `openai` | `https://api.openai.com/v1` | Direct provider access with your own key |
 
-Override URLs with `OLLAMA_BASE_URL`, `LM_STUDIO_BASE_URL`, `MLX_BASE_URL`,
-`LLAMACPP_BASE_URL`, or `OPENAI_BASE_URL`. `openrouter` requires
-`OPENROUTER_API_KEY` and `openai` requires `OPENAI_API_KEY`. `llamacpp` uses
-`LLAMACPP_API_KEY` only if your `llama-server` enforces one.
+Switch at runtime with `/backend <name>`. Endpoint overrides:
+`OLLAMA_BASE_URL`, `LM_STUDIO_BASE_URL`, `MLX_BASE_URL`, `LLAMACPP_BASE_URL`,
+`OPENAI_BASE_URL`. Cloud backends require an API key (set via
+[`/auth`](#cost-and-credentials) or env var). The catalog ships sensible
+defaults per backend and hardware profile; override with `/model` or
+`AGENT_MODEL`.
 
-### Why not OpenRouter's Responses API?
+### Hardware profiles
 
-The official `@openrouter/agent` SDK speaks OpenRouter's newer `/responses`
-endpoint. Small Harness uses a hand-rolled `reqwest` + SSE client pointed at
-each backend's `baseURL` because `/v1/chat/completions` is the common shape
-across the supported local servers and OpenRouter cloud, even when a backend
-also exposes newer endpoints.
+| Profile | Ollama | LM Studio | MLX | llama.cpp |
+|---------|--------|-----------|-----|-----------|
+| `mac-mini-16gb` | `qwen2.5-coder:7b` | `qwen2.5-coder-7b-instruct` | `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` | `gpt-3.5-turbo` |
+| `mac-studio-32gb` | `qwen2.5-coder:14b` | `qwen2.5-coder-14b-instruct` | `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` | `gpt-3.5-turbo` |
 
-## Tools
+OpenRouter defaults to `qwen/qwen-2.5-coder-32b-instruct`; OpenAI defaults to
+`gpt-4o-mini`. Switch profile with `/profile <name>`.
 
-| Tool | Default | Approval | What it does |
-| --- | --- | --- | --- |
-| `apply_patch` | off | yes | Validate and apply a unified diff with `git apply --check` |
-| `file_read` | on | no* | Read a file (text or image base64) with optional offset/limit |
-| `file_edit` | on | yes | Search-and-replace edits with unique-match validation, returns unified diff |
-| `grep` | on | no | Regex search file contents (uses ripgrep) |
-| `list_dir` | on | no* | List directory entries, alphabetical, capped at 500 |
-| `repo_search` | on | no | Search the local project memory index for ranked files, symbols, and snippets |
-| `file_write` | off | yes | Write/create a file (overwrites) |
-| `glob` | off | no* | Find files by glob pattern |
-| `run_tests` | ship/edit | policy* | Run tests with structured JSON (`discover`, `smart`, `all`, `pattern`) |
-| `batch_edit` | ship | apply only | Preview or apply coordinated multi-file edits (dry-run by default) |
-| `ship_status` | ship | no | Read-only git ship readiness snapshot with optional test run |
-| `shell` | off | yes | Run a shell command, output capped at 256 KB |
+### Recommend the right model for your box
 
-`*` Read-only tools prompt when `outsideWorkspace` is `prompt` and the request
-targets a path outside `workspaceRoot`. `run_tests` follows the session
-approval policy (`always` prompts; `dangerous-only` and `never` run silently).
+```
+/recommend           rank installed + default + cached models for your hardware
+/autotune apply      switch to the top-scoring cached local model
+/doctor --deep       probe streaming, usage chunks, tool calls, fallbacks
+/bench               measure warmup, first-token, and total latency
+```
 
-Toggle the active set per session with `/tools`, per shell with the
-`AGENT_TOOLS` env var, or persistently in `agent.config.json`.
+---
+
+## Tools and commands
+
+### Tools
+
+| Class | Tools |
+|-------|-------|
+| Read | `file_read`, `grep`, `list_dir`, `glob`, `repo_search` |
+| Mutate (approval-gated) | `file_write`, `file_edit`, `apply_patch`, `batch_edit`, `shell` |
+| Workflow | `run_tests`, `ship_status`, `web_fetch` |
+| MCP | anything an MCP server exposes, surfaced as `mcp__<server>__<tool>` |
+
+Each tool definition costs prompt-eval time on small local models. The
+default `toolSelection: "auto"` sends only the tools that look relevant to
+each prompt; switch to `fixed` to always send the full set. Toggle the
+active pool with `/tools file_read,grep,list_dir`, or persistently in
+`agent.config.json`.
 
 ### Approval policies
 
 | Policy | Behavior |
-| --- | --- |
-| `always` (default) | Every call to a mutating tool prompts you |
-| `dangerous-only` | Only `shell` calls matching `rm`, `sudo`, `chmod`, `dd`, `mkfs`, etc. prompt; safer commands run silently |
-| `never` | No prompts (use only when you trust the model) |
+|--------|----------|
+| `always` (default) | Every mutating call prompts you, with a diff preview |
+| `dangerous-only` | Only `shell` calls matching `rm`, `sudo`, `chmod`, `dd`, `mkfs`, etc. prompt |
+| `never` | No prompts — use only when you trust the model |
 
-At each prompt you can choose `[y]es`, `[n]o`, `[a]lways for this tool`, or
-`[s]ession-allow this exact call`. The session cache resets on `/new`.
+At each prompt: `[y]es`, `[n]o`, `[a]lways for this tool`, or `[s]ession-allow
+this exact call`. The session cache resets on `/new`.
 
-## Slash Commands
+### Slash commands
 
-| Command | Description |
-| --- | --- |
-| `/help` | List available commands |
-| `/setup` | Run the setup wizard, write `agent.config.json`, probe the backend, and apply the new config |
-| `/new` | Start a fresh conversation |
-| `/clear` | Clear the screen |
-| `/config` | Show resolved mode, backend, model, workspace, history, display, and context config |
-| `/mode [explore\|edit\|ship\|review\|custom]` | Show or set an operator preset for tools, approvals, and step budget |
-| `/shipcheck [export [path]] [--tests]` | Summarize git branch drift, dirty files, diff stats, project-memory freshness, and test status; optionally save a Markdown report |
-| `/handoff [export\|save] [path] [--cloud]` | Draft commit, changelog, testing, and X-ready release copy from the current local git context; OpenRouter requires `--cloud` |
-| `/batch [preview\|apply] [operations.json]` | Execute multi-file operations with preview and rollback support |
-| `/refactor [references\|related] <file_path>` | Find cross-file references and related files using project memory |
-| `/test [discover\|run\|smart] [args]` | Discover, run, and analyze tests with smart selection based on changed files |
-| `/prompt [save\|list\|run\|builtin\|delete\|export\|import] [args]` | Save, list, run, and manage prompt templates with built-in library and import/export |
-| `/session [title <text>]` | Show session info or set a friendly session title |
-| `/sessions` | List saved sessions under `.sessions/` |
-| `/sessions search <query>` | Search saved session titles and transcript text |
-| `/sessions delete <id> --yes` | Delete a saved session and sidecar metadata |
-| `/sessions prune --yes` | Keep the 20 newest sessions and delete older sessions |
-| `/resume latest\|<id>` | Resume a saved session |
-| `/export current\|<id> [markdown\|json] [path]` | Export a session transcript |
-| `/backend [name]` | Switch backend (`ollama`, `lm-studio`, `mlx`, `llamacpp`, `openrouter`, `openai`) |
-| `/profile [name]` | Switch hardware profile (`mac-mini-16gb`, `mac-studio-32gb`) |
-| `/model [id]` | List models from the current backend and pick one, or set directly |
-| `/tools [auto\|fixed\|list]` | Show enabled tools, switch adaptive mode, or set the enabled pool: `/tools auto file_read,grep,list_dir` |
-| `/compare [model]` | Re-send the last user message to OpenRouter cloud for A/B |
-| `/context [maxMessages=N maxBytes=N modelTokens=N autoCompact=on\|off compactThreshold=N reserveRatio=N]` | Show prompt budget, effective model-aware limit, headroom, auto-guard status, and context settings |
-| `/compact [keep]` | Summarize or trim older turns into a compact continuation session (shared with auto-guard; preserves complete tool-call rounds) |
-| `/doctor` | Check backend reachability, model list, `rg`, config, and session storage |
-| `/doctor --deep [all]` | Probe OpenAI-compatible streaming, usage chunks, native tool calls, and inline JSON fallback, then save JSON/Markdown reports under `.sessions/doctor/` |
-| `/bench [model]` | Measure warmup, first-token, total latency, and output rate |
-| `/capabilities [refresh] [all]` | Show cached per-model capability and benchmark records, or refresh the active/all backend probes |
-| `/autotune [refresh] [all] [--cloud] [apply]` | Score cached models, recommend the best fit, and optionally apply it to the active session |
-| `/recommend [refresh] [all] [--cloud] [apply]` | Read safe hardware specs, rank installed/default/cached models, and optionally apply the best fit |
-| `/index [refresh\|refresh changed\|status\|clear]` | Build, show freshness counts, refresh changed files, or clear the safe local project memory index |
-| `/map [query]` | Print a compact repo map or focused project-memory hits |
-| `/memory [on\|off\|status]` | Toggle project memory for the active session |
-| `/remember <text>` | Save a durable local project note |
-| `/forget <id\|all>` | Remove one project note or clear all notes |
-| `/undo [list]` | Revert the last agent turn's file mutations (or list checkpoint stack) |
-| `/checkpoints [on\|off\|status]` | Toggle or inspect turn checkpoint settings for this session |
-| `/eval [prompt-file] [models]` | Run saved prompts against one or more models with tools off/on |
-| `/eval agent [fixture\|all] [models]` | Run agent-loop benchmarks (`read-and-explain`, `fix-failing-test`, `small-refactor`) and save scored JSON/Markdown under `.sessions/evals/` |
-| `exit` | Quit |
-
-`/doctor --deep` checks the active backend. Add `all` to probe every configured
-backend with short timeouts; unreachable backends show as failed rows in the
-capability table.
-
-`/doctor --deep` and `/bench` also update `.sessions/capabilities/`. Use
-`/capabilities` to view the local scoreboard and `/autotune apply` to switch
-the current session to the best cached local model. Add `--cloud` when you want
-OpenRouter records to compete with local models.
-
-`/recommend` is the best first stop when you do not know what to run. It reads
-only a safe hardware summary, caches it at `.sessions/hardware.json`, ranks
-installed/default/cached models for coding-agent use, and applies the top pick
-only when you pass `apply`.
-
-## Project Memory
-
-Run `/index` from the project root to build a safe local memory index under
-`.sessions/project-memory/index.json`. The index stores metadata only: relative
-paths, language, byte size, mtime, SHA-256, symbols, headings, imports, and
-capped keyword terms. It honors `.gitignore` and skips `.git`, `.sessions`,
-`target`, `node_modules`, binaries, oversized files, and common secret/env
-files.
-
-Use `/map` for a compact repo map, `/map config loader` for focused hits, and
-`/remember <text>` for durable project notes saved to
-`.sessions/project-memory/notes.jsonl`. When project memory is enabled,
-Small Harness can inject a compact local repo map into repo/code prompts and can
-use the `repo_search` tool before heavier grep/list/read calls. Cloud backends
-do not receive project memory unless `projectMemory.allowCloudContext` is true.
-
-Use `/index status` to see fresh, stale, missing, and deleted file counts.
-`/index refresh changed` refreshes the index through the same metadata/mtime/SHA
-reuse path as a full build. Successful `file_write`, `file_edit`, and
-`apply_patch` tool calls also refresh project memory when an index exists.
-
-## One-shot mode
-
-For scripts and CI, run one prompt without the TUI:
-
-```bash
-small-harness --print "summarize this repo"
-printf 'list the risky files\n' | small-harness
+**Session and config**
+```
+/help                  list commands
+/new                   start a fresh conversation
+/setup                 rerun the setup wizard
+/config                show resolved configuration
+/session [title <…>]   show / rename the current session
+/sessions              list saved sessions
+/resume latest|<id>    resume a saved session
+/export current|<id>   export transcript to markdown or json
+/undo                  revert the last agent turn's file mutations
 ```
 
-By default, approval-gated tools are denied in non-interactive mode. Pass
-`--allow-tools` only when you want write/shell tools to execute without prompts.
+**Operator modes and workflow**
+```
+/mode explore|edit|ship|review   switch operator preset
+/shipcheck                       summarize git + test readiness
+/handoff                         draft commit, changelog, release copy
+/test discover|run|smart         discover or run tests
+/fix                             fix-until-green loop
+/batch / /refactor               coordinated multi-file edits
+/play fix-failing-test           bundled demo in an isolated sandbox
+```
 
-## Hardware Profiles
+**Backend, model, tools**
+```
+/backend <name>        switch backend
+/profile <name>        switch hardware profile
+/model [id]            list / pick a model (shows context + cost when known)
+/tools auto|fixed|<…>  show or set the active tool pool
+/auth                  manage API keys (list, set, clear)
+/image <path>          attach an image to the next user turn
+/reasoning on|off      toggle the streaming reasoning panel
+/compare [model]       re-send the last prompt against OpenRouter for A/B
+```
 
-The profile drives the default model per backend. You can always override
-with `AGENT_MODEL` or `/model`.
+**Memory, capabilities, context**
+```
+/index                 build / refresh project memory
+/map [query]           print a repo map or focused hits
+/remember <text>       save a durable project note
+/forget <id|all>       remove notes
+/context               show prompt budget, model limit, auto-guard status
+/compact               summarize older turns (auto-runs at threshold)
+/doctor [--deep]       probe backend, tools, streaming, capabilities
+/capabilities          show cached per-model capability + benchmark records
+/autotune              pick the best cached local model
+/recommend             rank models for your hardware
+/bench                 measure warmup + first-token + total latency
+/checkpoints           toggle per-turn snapshots
+```
 
-| Profile | Default Ollama model | Default LM Studio model | Default MLX model | Default llama.cpp model |
-| --- | --- | --- | --- | --- |
-| `mac-mini-16gb` | `qwen2.5-coder:7b` | `qwen2.5-coder-7b-instruct` | `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` | `gpt-3.5-turbo` |
-| `mac-studio-32gb` | `qwen2.5-coder:14b` | `qwen2.5-coder-14b-instruct` | `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` | `gpt-3.5-turbo` |
+Run `/help` in the harness for the full list with descriptions.
 
-The OpenRouter cloud default for both profiles is
-`qwen/qwen-2.5-coder-32b-instruct`, and the OpenAI default is `gpt-4o-mini`.
-The llama.cpp default mirrors the `llama-server` OpenAI-compatible examples;
-use `/model` or start `llama-server` with `--alias` if you want the loaded
-GGUF to advertise a specific model id.
+---
 
-## Warmup
+## Cost and credentials
 
-llama.cpp and llama.cpp-derived engines cache the prompt-eval result for any
-prefix they have already seen. At startup, Small Harness sends a tiny
-chat-completions request with the full system prompt + tool definitions and
-`max_tokens: 1`.
-That populates the cache, so your first real prompt only has to evaluate
-the new user tokens — typically dropping first-prompt latency from ~12 s to
-~2 s on a 7B q4 model.
+### Credentials with `/auth`
 
-Disable with `WARMUP=false` if you want a faster startup at the cost of a
-slow first prompt.
+Cloud backends authenticate with API keys. Paste them once and Small Harness
+stores them at `~/.config/small-harness/auth.json` (mode `0600`). Environment
+variables always win at lookup time, so CI and scripted users see no change
+in behavior.
 
-The cache becomes stale when you change `/backend`, `/model`, or `/tools`.
-The next prompt after a switch will pay the prompt-eval cost again.
+```text
+/auth                    show what's configured (keys are masked)
+/auth set openai         paste your OpenAI key, save to file + this session
+/auth set openrouter     paste your OpenRouter key
+/auth clear openai       remove from the file (env stays for this session)
+```
+
+### Per-turn and session cost
+
+When you're on a cloud backend with a model in the catalog (currently OpenAI's
+GPT-4o family, o-series, GPT-4, GPT-3.5), every turn prints its own cost
+plus the running session total:
+
+```text
+  2.1k in · 845 out · $0.013 this turn · $0.094 session
+```
+
+Switch to Ollama mid-session and the line shows `$0.00 this turn` but keeps
+the running total honest. OpenRouter and not-yet-cataloged OpenAI models
+show `$?` for the turn and prefix the session total with `≥` to signal it's
+a lower bound, not a fiction.
+
+The `/model` picker shows the same data while you choose:
+
+```text
+   1) gpt-4o-mini            128k ctx · $0.15/$0.60 per Mtoken
+   2) gpt-4o                 128k ctx · $2.50/$10.00 per Mtoken
+   3) o1-mini                128k ctx · $3.00/$12.00 per Mtoken
+```
+
+---
+
+## Going further
+
+### Project-specific system prompt
+
+Drop a markdown file at `.small-harness/prompt.md` in your repo and Small
+Harness prepends it to the system prompt every turn. Use it for project
+conventions ("snake_case everywhere", "ship via `make release`", "never
+edit `vendor/`"). Auto-truncated at 8 KB.
+
+### MCP servers
+
+Add an `mcpServers` block to `agent.config.json`:
+
+```json
+{
+  "mcpServers": {
+    "fs": {
+      "command": "/usr/local/bin/some-mcp-server",
+      "args": ["--root", "/tmp"],
+      "env": { "TOKEN": "abc" }
+    }
+  }
+}
+```
+
+Small Harness spawns each server at startup, lists its tools, and exposes
+them through the same approval-gated tool layer with names like
+`mcp__fs__read_file`. JSON-RPC over stdio; no extra dependencies.
+
+### Image input
+
+`/image <path>` attaches an image to your next prompt. Small Harness encodes
+it as a `data:image/...;base64,...` URL and sends it as a multi-part user
+message. The catalog tracks which models accept images; you get a warning
+if your current model isn't vision-capable.
+
+### Web fetch
+
+`web_fetch` (off by default, approval-gated) lets the agent pull a URL,
+strip HTML to text, and read the result. Useful for docs and RFCs the model
+needs to consult mid-task. Enable per session with
+`/tools auto file_read,grep,list_dir,web_fetch` or persistently in your
+config.
+
+### Project memory
+
+`/index` builds a safe local repo map at `.sessions/project-memory/`. It
+stores metadata only — paths, language, symbols, headings, capped keyword
+terms — never file bodies. It honors `.gitignore` and skips `.git`,
+`.sessions`, `target`, `node_modules`, binaries, oversized files, and
+common secret/env files. `/map` prints a compact view; `/remember <text>`
+saves a durable project note.
+
+### Compare clouds with `/compare`
+
+`/compare` re-sends your last prompt against any OpenRouter model so you can
+A/B a local response against a frontier one without leaving the session.
+Requires `OPENROUTER_API_KEY`.
+
+---
 
 ## Configuration
 
-### Environment variables
+Resolution order (later overrides earlier):
+
+1. Built-in defaults
+2. `agent.config.json` in the working directory
+3. `.env`, then `.env.local`
+4. Process environment variables
+5. Slash command overrides at runtime
+
+### Environment variables (the useful ones)
 
 ```bash
-# Backend selection: ollama (default), lm-studio, mlx, llamacpp, openrouter, openai
-BACKEND=ollama
+BACKEND=ollama                                          # ollama|lm-studio|mlx|llamacpp|openrouter|openai
+PROFILE=mac-mini-16gb                                   # or mac-studio-32gb
+AGENT_MODEL=qwen2.5-coder:14b                           # overrides the profile default
 
-# Hardware profile: mac-mini-16gb (default) or mac-studio-32gb
-PROFILE=mac-mini-16gb
+OPENAI_API_KEY=sk-...                                   # required for openai
+OPENROUTER_API_KEY=sk-or-...                            # required for openrouter / /compare
+OPENAI_BASE_URL=https://api.openai.com/v1               # point at a compatible proxy if needed
 
-# Override the model for the chosen backend
-AGENT_MODEL=qwen2.5-coder:14b
-
-# Per-backend endpoint overrides
-OLLAMA_BASE_URL=http://localhost:11434/v1
-LM_STUDIO_BASE_URL=http://localhost:1234/v1
-MLX_BASE_URL=http://localhost:8080/v1
-LLAMACPP_BASE_URL=http://localhost:8080/v1
-OPENAI_BASE_URL=https://api.openai.com/v1
-
-# Optional if llama-server was started with API-key enforcement
-LLAMACPP_API_KEY=sk-no-key-required
-
-# Required when BACKEND=openrouter or you want /compare
-OPENROUTER_API_KEY=sk-or-...
-
-# Required when BACKEND=openai
-OPENAI_API_KEY=sk-...
-
-# Approval policy: always (default) | never | dangerous-only
-APPROVAL_POLICY=always
-
-# Operator mode: explore | edit (default) | ship | review | custom
-SMALL_HARNESS_MODE=edit
-
-# Active tools, comma-separated. Default:
-# file_read,file_edit,grep,list_dir,repo_search
+APPROVAL_POLICY=always                                  # always | dangerous-only | never
 AGENT_TOOLS=file_read,file_edit,grep,list_dir,repo_search
+AGENT_TOOL_SELECTION=auto                               # auto | fixed
 
-# Tool schema selection: auto (default) or fixed
-AGENT_TOOL_SELECTION=auto
-
-# Pre-warm the model at startup (default: on)
-WARMUP=true
-
-# Skip first-run setup and rely on env vars / built-in defaults
-SMALL_HARNESS_NO_WIZARD=false
-
-# Maximum agent steps per turn
-AGENT_MAX_STEPS=20
-
-# Workspace safety: prompt (default), deny, allow
-WORKSPACE_ROOT=/path/to/project
-OUTSIDE_WORKSPACE=prompt
-
-# Context/history tuning
-AGENT_CONTEXT_MAX_MESSAGES=40
-AGENT_CONTEXT_MAX_BYTES=262144
-AGENT_HISTORY=true
-AGENT_HISTORY_MAX_ENTRIES=200
+WARMUP=true                                             # pre-warm prompt cache at startup
+SMALL_HARNESS_NO_WIZARD=false                           # skip first-run setup
+SMALL_HARNESS_NO_UPDATE_CHECK=false                     # skip the GitHub release check
 ```
+
+Full list with comments in [`.env.example`](.env.example).
 
 ### `agent.config.json`
 
-For project-level defaults, run `/setup` or drop a JSON file in the repo root.
-Anything you put here can be overridden by env vars or slash commands at
-runtime.
+For project-level defaults, run `/setup` or drop a JSON file at the repo
+root. Common shape:
 
 ```json
 {
@@ -457,56 +402,97 @@ runtime.
   "outsideWorkspace": "prompt",
   "context": {
     "maxMessages": 40,
-    "maxBytes": 262144,
     "modelContextTokens": 8192,
     "autoCompact": true,
     "compactThreshold": 0.85,
     "reserveRatio": 0.25
   },
-  "history": {
-    "enabled": true,
-    "maxEntries": 200
-  },
   "projectMemory": {
     "enabled": true,
     "autoInject": true,
-    "autoIndex": false,
-    "maxFileBytes": 524288,
-    "maxInjectedBytes": 8192,
     "allowCloudContext": false
   },
-  "checkpoints": {
-    "enabled": true,
-    "maxTurns": 10,
-    "maxBytes": 10485760,
-    "maxFileBytes": 1048576
+  "checkpoints": { "enabled": true, "maxTurns": 10 },
+  "mcpServers": {
+    "fs": { "command": "/usr/local/bin/some-mcp-server", "args": [] }
   },
   "profiles": {
     "mac-studio-fast": {
       "ollama": "qwen2.5-coder:14b",
-      "llamacpp": "gpt-3.5-turbo",
       "openrouter": "qwen/qwen-2.5-coder-32b-instruct"
     }
-  },
-  "display": {
-    "toolDisplay": "grouped",
-    "inputStyle": "bordered",
-    "loaderStyle": "spinner",
-    "loaderText": "Thinking",
-    "showBanner": true
   }
 }
 ```
 
-`context.autoCompact` defaults to on for local backends. When the effective prompt budget crosses `compactThreshold`, Small Harness compacts older conversation history automatically. Compaction splits on user turns and complete assistant/tool-call rounds so the transcript stays valid for OpenAI-compatible APIs. Conversation summaries are stored separately and merged back into each turn's system prompt. One-shot `--print` mode does not auto-compact; use `/compact` in the TUI or start a fresh session instead.
+Anything in the config can be overridden by env or slash commands at
+runtime.
 
-### Resolution order
+---
 
-1. Slash command overrides at runtime
-2. Process environment variables (`BACKEND`, `PROFILE`, `AGENT_MODEL`, `AGENT_TOOLS`, …)
-3. `.env.local`, then `.env`
-4. `agent.config.json` in the working directory
-5. Built-in defaults
+## Quality of life
+
+- **`small-harness --continue`** resumes the most recent session in cwd
+  without picking from a list.
+- **`small-harness completions bash|zsh|fish`** prints a completion script
+  you can source.
+- **`/reasoning on|off`** toggles the streaming reasoning panel — adds a
+  dim "thinking…" block above the answer for o-series and similar models.
+- **Update check.** Once a day, Small Harness checks GitHub for a newer
+  release and shows a one-line notice in the banner if there is one.
+  Background, cached, opt-out with `SMALL_HARNESS_NO_UPDATE_CHECK=true`.
+- **Crash log.** If the harness panics, it writes a redacted log (API keys
+  scrubbed) to `.sessions/crashes/<timestamp>.log` and prints the path so
+  you have something to attach to an issue.
+- **One-shot mode** — `small-harness --print "summarize this repo"` or
+  `printf '…\n' | small-harness` for scripts and CI. Approval-gated tools
+  are denied by default; pass `--allow-tools` to allow them.
+- **Warmup.** Small Harness sends a 1-token request with the full system
+  prompt + tools at startup so llama.cpp-derived engines have a hot
+  prompt-eval cache before your first prompt. Disable with `WARMUP=false`.
+
+---
+
+## Troubleshooting
+
+### `Backend not reachable: Connection error`
+
+- **Ollama** — `brew services start ollama` or run `ollama serve`. Default port 11434.
+- **LM Studio** — open the app, go to Local Server, click Start. Default port 1234.
+- **MLX** — start `mlx_lm.server --port 8080` against an MLX-format model.
+- **llama.cpp** — `llama-server -m /path/to/model.gguf --host 127.0.0.1 --port 8080 --jinja` (the `--jinja` flag enables native tool calls).
+- **OpenRouter** — set `OPENROUTER_API_KEY` (or use `/auth set openrouter`).
+- **OpenAI** — set `OPENAI_API_KEY` (or use `/auth set openai`). Use `OPENAI_BASE_URL` for a compatible proxy.
+
+Run `/doctor --deep` for a fuller capability probe (streaming, usage chunks,
+native tool calls, inline JSON fallback). Reports land under `.sessions/doctor/`.
+
+### First prompt is slow even with warmup
+
+The cache becomes stale when you change `/backend`, `/model`, `/tools`, or
+the hardware profile. The next prompt re-evaluates the new system prompt
+and tools. One-time per change.
+
+### Model returns tool calls as text JSON
+
+Some small-model templates emit tool calls as plain content
+(`{"name": "shell", "arguments": {…}}`) instead of populating the
+`tool_calls` field. Small Harness detects and synthesizes a real tool call.
+If a particular model still misbehaves, `llama3.1:8b` has well-tested
+tool-call templates.
+
+### Model responds in another language unexpectedly
+
+Some bilingual models (notably qwen) drift into Chinese on short greetings.
+The system prompt has an explicit language directive; if it's still
+happening, strengthen it by editing `SYSTEM_PROMPT` in `src/config.rs`.
+
+### `cargo: command not found`
+
+Install Rust via [rustup](https://rustup.rs):
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+
+---
 
 ## Architecture
 
@@ -518,135 +504,54 @@ runtime.
                 +------------+------------+
                              |
                              v
-+--------------+    +-------------------------+    +-------------------+
-|  config.rs   |--->|        agent.rs         |<-->|   tools/*.rs      |
-|  dotenv+JSON |    |  chat/completions loop  |    |  serde-typed,     |
-|  + profiles  |    |  streaming + tool calls |    |  approval-gated   |
-+--------------+    +------------+------------+    +-------------------+
-                                 |
-                                 v
++-----------+    +-------------------------+    +-------------------+
+| config.rs |--->|        agent.rs         |<-->|    tools/*.rs     |
+|  + auth/  |    |  chat/completions loop  |    | + mcp__ adapters  |
++-----------+    +-------------+-----------+    +-------------------+
+                               |
+                               v
                 +-------------------------+
-                |     backends.rs         |
+                |       backends.rs       |
                 |  Ollama / LM Studio /   |
                 |  MLX / llama.cpp /      |
                 |  OpenRouter / OpenAI    |
                 +-------------------------+
-                             |
-                             v
-                +-------------------------+
-                |   session.rs            |
-                |  JSONL sessions/export  |
-                +-------------------------+
 ```
 
-## Development
+Source layout in [`src/`](src/) — `agent.rs` runs the loop, `backends.rs`
+holds the six providers, `tools/` holds tool implementations, `mcp.rs` is
+the stdio MCP client, `catalog.rs` has the per-model context + pricing
+table, `auth.rs` manages the credential file, `session.rs` writes the JSONL
+log. `cargo doc --open` for module-level docs.
+
+---
+
+## Contributing
 
 ```bash
 cargo check                # type-check without producing a binary
-cargo run                  # debug build + run (faster compile, slower runtime)
 cargo run --release        # optimized build + run
-cargo build --release      # produce target/release/small-harness
+cargo build --release      # target/release/small-harness
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-Project layout:
+Guidelines:
 
-```text
-src/
-  main.rs             entry — input loop, loader, approval wiring, warmup
-  agent.rs            chat/completions runner with tool calls + streaming
-  backends.rs         Ollama / LM Studio / MLX / llama.cpp / OpenRouter / OpenAI endpoints + defaults
-  config.rs           dotenv + agent.config.json loader, workspace/context/history/memory config
-  context_guard.rs    model-aware prompt limits, auto-compaction, and deterministic trim fallback
-  budget.rs           prompt byte/token budgeting helpers
-  hardware.rs         safe local hardware summary + memory-tier profile inference
-  project_memory.rs   local repo index, notes, repo maps, and prompt-context injection
-  handoff.rs          local git handoff context, prompts, fallback Markdown, and exports
-  recommend.rs        hardware-aware model candidate parsing, scoring, and apply helpers
-  capabilities.rs     persistent model capability cache, scoring, and autotune helpers
-  shipcheck.rs        git and project-memory release preflight helpers
-  approval.rs         y/n/always/session-allow prompt with diff previews
-  session.rs          JSONL conversation log, listing, resume, export helpers
-  warmup.rs           pre-warm the prompt-eval cache at startup
-  commands.rs         slash commands for sessions, config, backends, evals, doctor, bench
-  renderer.rs         grouped tool display
-  loader.rs           spinner / gradient / minimal loaders
-  banner.rs           ASCII banner + dynamic backend/profile/model line
-  input.rs            bordered + plain readers with history and multi-line input
-  openai.rs           wire types + SSE streaming for chat completions
-  tools/              apply_patch, file_read, file_write, file_edit, glob_tool, grep, list_dir, repo_search, shell
-```
+- Mutating tools implement `require_approval` on the `Tool` trait (return
+  `true`, or compute from args — see `shell.rs`).
+- New backends need an OpenAI-compatible `/v1/chat/completions` endpoint
+  and a profile-default model map in `backends.rs`.
+- Plan-style feature builds follow the gates in
+  [`docs/INTEGRATION_MATRIX.md`](docs/INTEGRATION_MATRIX.md).
 
-Quality expectations:
+Release tags use a leading `v` (`v0.3.0`). The release workflow at
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds
+notarized macOS binaries when Apple Developer secrets are present.
 
-- `cargo check` must pass cleanly.
-- Tools that mutate filesystem state implement `require_approval` on the
-  `Tool` trait (returning `true`, or computing it from the args for
-  dangerous shapes — see `shell.rs`).
-- New backends should expose an OpenAI-compatible `/v1/chat/completions`
-  endpoint and add a profile-default model map in `backends.rs`.
-
-Versioning:
-
-- Small Harness is currently on the `0.2.x` product line.
-- Use patch bumps for focused feature and fix releases, such as `0.2.2`.
-- Release tags should use a leading `v`, for example `v0.2.2`.
-
-Feature wrap-up:
-
-- When finishing a feature, include a one-line git commit message in the
-  handoff.
-- Also include an X-ready post with a high-level summary and 3-4 short bullets
-  covering what changed.
-
-## Troubleshooting
-
-### `Backend not reachable: Connection error`
-
-The harness probes the backend at startup. If you see this message, the
-named backend is not listening on the expected port. Suggestions:
-
-- **Ollama**: `brew services start ollama`, or run `ollama serve` in a
-  separate terminal. Default port 11434.
-- **LM Studio**: open the app, go to "Local Server", click Start. Default
-  port 1234.
-- **MLX**: start `mlx_lm.server --port 8080` against an MLX-format model.
-- **llama.cpp**: start `llama-server -m /path/to/model.gguf --host 127.0.0.1 --port 8080`.
-  Add `--jinja` when you want native OpenAI-style tool calls.
-- **OpenRouter**: set `OPENROUTER_API_KEY` in `.env`.
-- **OpenAI**: set `OPENAI_API_KEY` in `.env`. Use `OPENAI_BASE_URL` to point
-  at an OpenAI-compatible proxy instead of `api.openai.com`.
-
-For backend-specific capability problems, run `/doctor --deep`. It exercises
-`/v1/models`, streaming chat completions, usage chunks, a harmless tool-call
-schema, and Small Harness' inline JSON fallback detector. Reports are saved to
-`.sessions/doctor/` for sharing or comparison.
-
-### First prompt is slow even with warmup
-
-If you change `/backend`, `/model`, `/tools`, or the hardware profile after
-warmup, the cached prefix becomes stale and the next prompt re-evaluates
-the new system prompt + tools. This is one-time per change.
-
-### Model returns tool calls as text JSON
-
-Some small-model templates emit tool calls as plain content
-(e.g. `{"name":"shell","arguments":{...}}`) instead of populating the
-`tool_calls` field. Small Harness detects this pattern and synthesizes a
-real tool call. If a particular model still misbehaves, switching to
-`llama3.1:8b` (which has well-tested tool-call templates) usually resolves
-it.
-
-### Model responds in another language unexpectedly
-
-Some bilingual models (notably the qwen family) drift into Chinese on short
-greetings. The system prompt now includes an explicit language directive,
-but you can strengthen it further by editing `SYSTEM_PROMPT` in
-`src/config.rs`.
-
-### `cargo: command not found`
-
-Install Rust via [rustup](https://rustup.rs): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+---
 
 ## License
 
-Small Harness is released under the [MIT License](LICENSE).
+[MIT](LICENSE).

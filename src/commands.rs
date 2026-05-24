@@ -930,8 +930,13 @@ async fn cmd_backend(args: &str, state: &mut AppState) -> Result<()> {
         println!("  {DIM}Cancelled.{RESET}");
         return Ok(());
     };
-    if matches!(chosen, BackendName::Openrouter) && backend(chosen).api_key.is_empty() {
-        println!("  {RED}✗{RESET} {DIM}OPENROUTER_API_KEY not set in environment.{RESET}");
+    if !chosen.is_local() && backend(chosen).api_key.is_empty() {
+        let env_name = match chosen {
+            BackendName::Openrouter => "OPENROUTER_API_KEY",
+            BackendName::OpenAi => "OPENAI_API_KEY",
+            _ => "API key",
+        };
+        println!("  {RED}✗{RESET} {DIM}{env_name} not set in environment.{RESET}");
         return Ok(());
     }
     state.config.backend = chosen;
@@ -1554,8 +1559,13 @@ async fn cmd_doctor(args: &str, state: &AppState) -> Result<()> {
         Ok(_) => println!("  {GREEN}✓{RESET} {DIM}session dir writable{RESET}"),
         Err(e) => println!("  {RED}✗{RESET} {DIM}session dir not writable: {e}{RESET}"),
     }
-    if matches!(state.config.backend, BackendName::Openrouter) && state.backend.api_key.is_empty() {
-        println!("  {RED}✗{RESET} {DIM}OPENROUTER_API_KEY missing{RESET}");
+    if !state.config.backend.is_local() && state.backend.api_key.is_empty() {
+        let env_name = match state.config.backend {
+            BackendName::Openrouter => "OPENROUTER_API_KEY",
+            BackendName::OpenAi => "OPENAI_API_KEY",
+            _ => "API key",
+        };
+        println!("  {RED}✗{RESET} {DIM}{env_name} missing{RESET}");
     }
     println!(
         "  {DIM}workspace{RESET} {} ({})",
@@ -2296,7 +2306,7 @@ fn recommend_backend_names(state: &AppState, all: bool, include_cloud: bool) -> 
         BackendName::all()
             .iter()
             .copied()
-            .filter(|name| include_cloud || *name != BackendName::Openrouter)
+            .filter(|name| include_cloud || name.is_local())
             .collect()
     } else {
         vec![state.config.backend]
@@ -2378,7 +2388,7 @@ async fn collect_recommendation_candidates(
         let Some(backend_name) = record.backend_name() else {
             continue;
         };
-        if !include_cloud && backend_name == BackendName::Openrouter {
+        if !include_cloud && !backend_name.is_local() {
             continue;
         }
         let mut candidate =
@@ -2434,6 +2444,7 @@ fn backend_model_hint(backend_name: BackendName, model: &str) -> String {
             "start llama.cpp with `llama-server -m /path/to/model.gguf --host 127.0.0.1 --port 8080 --jinja`".into()
         }
         BackendName::Openrouter => "set OPENROUTER_API_KEY before using OpenRouter".into(),
+        BackendName::OpenAi => "set OPENAI_API_KEY before using OpenAI".into(),
     }
 }
 

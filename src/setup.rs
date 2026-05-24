@@ -425,6 +425,9 @@ fn backend_hint(backend: BackendName) -> &'static str {
             "run `llama-server -m /path/to/model.gguf --host 127.0.0.1 --port 8080 --jinja`."
         }
         BackendName::Openrouter => "set `OPENROUTER_API_KEY` before using the OpenRouter backend.",
+        BackendName::OpenAi => {
+            "set `OPENAI_API_KEY` before using the OpenAI backend (optionally `OPENAI_BASE_URL` for a compatible proxy)."
+        }
     }
 }
 

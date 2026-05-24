@@ -108,7 +108,7 @@ impl CapabilityRecord {
     }
 
     pub fn is_cloud(&self) -> bool {
-        self.backend == BackendName::Openrouter.as_str()
+        self.backend_name().map(|b| !b.is_local()).unwrap_or(false)
     }
 
     pub fn tool_path(&self) -> &'static str {

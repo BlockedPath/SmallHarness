@@ -118,7 +118,7 @@ pub fn recommend_models(
     let profile = spec.recommended_profile().to_string();
     let mut recommendations: Vec<ModelRecommendation> = merge_candidates(candidates)
         .into_values()
-        .filter(|candidate| include_cloud || candidate.backend != BackendName::Openrouter)
+        .filter(|candidate| include_cloud || candidate.backend.is_local())
         .map(|candidate| score_candidate(spec, &profile, candidate))
         .collect();
     recommendations.sort_by(|a, b| {
@@ -234,7 +234,7 @@ fn score_candidate(
         ("unknown".into(), None)
     };
 
-    if candidate.backend == BackendName::Openrouter {
+    if !candidate.backend.is_local() {
         score -= 40;
         rationale.push("cloud backend".into());
     }
@@ -502,6 +502,23 @@ mod tests {
         assert!(with_cloud
             .iter()
             .any(|r| r.backend == BackendName::Openrouter));
+    }
+
+    #[test]
+    fn openai_is_filtered_with_other_cloud_backends() {
+        let local = candidate("local-coder:7b");
+        let mut openai = ModelCandidate::new(
+            BackendName::OpenAi,
+            "https://api.openai.com/v1",
+            "gpt-4o-mini",
+        );
+        openai.installed = true;
+
+        let local_only = recommend_models(&spec(16), vec![local.clone(), openai.clone()], false);
+        assert!(local_only.iter().all(|r| r.backend.is_local()));
+
+        let with_cloud = recommend_models(&spec(16), vec![local, openai], true);
+        assert!(with_cloud.iter().any(|r| r.backend == BackendName::OpenAi));
     }
 
     #[test]

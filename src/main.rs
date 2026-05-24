@@ -230,6 +230,9 @@ async fn probe_backend(
                     "Start `llama-server -m /path/to/model.gguf --host 127.0.0.1 --port 8080`. Use `--jinja` for native tool calls."
                 }
                 crate::backends::BackendName::Openrouter => "Check OPENROUTER_API_KEY.",
+                crate::backends::BackendName::OpenAi => {
+                    "Check OPENAI_API_KEY (or OPENAI_BASE_URL if you're targeting a compatible proxy)."
+                }
             };
             Err(format!("{e}. {hint}"))
         }

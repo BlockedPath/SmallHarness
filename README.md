@@ -24,7 +24,7 @@
   <a href="https://github.com/GetSmallAI/SmallHarness/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/GetSmallAI/SmallHarness/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.75%2B-dea584">
   <img alt="Version" src="https://img.shields.io/badge/version-0.2.2-111827">
-  <img alt="Backends" src="https://img.shields.io/badge/backends-Ollama%20%7C%20LM%20Studio%20%7C%20MLX%20%7C%20llama.cpp%20%7C%20OpenRouter-2563eb">
+  <img alt="Backends" src="https://img.shields.io/badge/backends-Ollama%20%7C%20LM%20Studio%20%7C%20MLX%20%7C%20llama.cpp%20%7C%20OpenRouter%20%7C%20OpenAI-2563eb">
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-optimized-111827">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827">
 </p>
@@ -32,12 +32,12 @@
 ## What Is Small Harness?
 
 Small Harness is a terminal-based agent harness for running small open-weight
-LLMs locally on consumer Macs. It points the same TUI at five different
+LLMs locally on consumer Macs. It points the same TUI at six different
 inference backends: [Ollama](https://ollama.com), [LM Studio](https://lmstudio.ai),
-MLX, [llama.cpp](https://github.com/ggml-org/llama.cpp), or
-[OpenRouter](https://openrouter.ai) cloud. The harness gives the model a
-focused set of filesystem and shell tools, and gates dangerous operations
-behind an approval prompt.
+MLX, [llama.cpp](https://github.com/ggml-org/llama.cpp),
+[OpenRouter](https://openrouter.ai), or [OpenAI](https://platform.openai.com)
+direct. The harness gives the model a focused set of filesystem and shell
+tools, and gates dangerous operations behind an approval prompt.
 
 It is built for developers who want to use a 7B–14B model as an interactive
 coding assistant without depending on a cloud API. Hardware profiles for the
@@ -192,10 +192,12 @@ Or set persistently in `agent.config.json`:
 | `mlx` | `http://localhost:8080/v1` | OpenAI-compatible (via `mlx_lm.server`) | Fastest inference on Apple Silicon |
 | `llamacpp` | `http://localhost:8080/v1` | OpenAI-compatible (via `llama-server`) | Direct GGUF serving; fastest path if you already use llama.cpp |
 | `openrouter` | `https://openrouter.ai/api/v1` | OpenAI-compatible | Cloud A/B comparison; access to larger frontier models |
+| `openai` | `https://api.openai.com/v1` | OpenAI-native | Direct provider access using your own API key |
 
 Override URLs with `OLLAMA_BASE_URL`, `LM_STUDIO_BASE_URL`, `MLX_BASE_URL`,
-or `LLAMACPP_BASE_URL`. `openrouter` requires `OPENROUTER_API_KEY`.
-`llamacpp` uses `LLAMACPP_API_KEY` only if your `llama-server` enforces one.
+`LLAMACPP_BASE_URL`, or `OPENAI_BASE_URL`. `openrouter` requires
+`OPENROUTER_API_KEY` and `openai` requires `OPENAI_API_KEY`. `llamacpp` uses
+`LLAMACPP_API_KEY` only if your `llama-server` enforces one.
 
 ### Why not OpenRouter's Responses API?
 
@@ -263,7 +265,7 @@ At each prompt you can choose `[y]es`, `[n]o`, `[a]lways for this tool`, or
 | `/sessions prune --yes` | Keep the 20 newest sessions and delete older sessions |
 | `/resume latest\|<id>` | Resume a saved session |
 | `/export current\|<id> [markdown\|json] [path]` | Export a session transcript |
-| `/backend [name]` | Switch backend (`ollama`, `lm-studio`, `mlx`, `llamacpp`, `openrouter`) |
+| `/backend [name]` | Switch backend (`ollama`, `lm-studio`, `mlx`, `llamacpp`, `openrouter`, `openai`) |
 | `/profile [name]` | Switch hardware profile (`mac-mini-16gb`, `mac-studio-32gb`) |
 | `/model [id]` | List models from the current backend and pick one, or set directly |
 | `/tools [auto\|fixed\|list]` | Show enabled tools, switch adaptive mode, or set the enabled pool: `/tools auto file_read,grep,list_dir` |
@@ -345,10 +347,10 @@ with `AGENT_MODEL` or `/model`.
 | `mac-studio-32gb` | `qwen2.5-coder:14b` | `qwen2.5-coder-14b-instruct` | `mlx-community/Qwen2.5-Coder-14B-Instruct-4bit` | `gpt-3.5-turbo` |
 
 The OpenRouter cloud default for both profiles is
-`qwen/qwen-2.5-coder-32b-instruct`. The llama.cpp default mirrors the
-`llama-server` OpenAI-compatible examples; use `/model` or start
-`llama-server` with `--alias` if you want the loaded GGUF to advertise a
-specific model id.
+`qwen/qwen-2.5-coder-32b-instruct`, and the OpenAI default is `gpt-4o-mini`.
+The llama.cpp default mirrors the `llama-server` OpenAI-compatible examples;
+use `/model` or start `llama-server` with `--alias` if you want the loaded
+GGUF to advertise a specific model id.
 
 ## Warmup
 
@@ -371,7 +373,7 @@ The next prompt after a switch will pay the prompt-eval cost again.
 ### Environment variables
 
 ```bash
-# Backend selection: ollama (default), lm-studio, mlx, llamacpp, openrouter
+# Backend selection: ollama (default), lm-studio, mlx, llamacpp, openrouter, openai
 BACKEND=ollama
 
 # Hardware profile: mac-mini-16gb (default) or mac-studio-32gb
@@ -385,12 +387,16 @@ OLLAMA_BASE_URL=http://localhost:11434/v1
 LM_STUDIO_BASE_URL=http://localhost:1234/v1
 MLX_BASE_URL=http://localhost:8080/v1
 LLAMACPP_BASE_URL=http://localhost:8080/v1
+OPENAI_BASE_URL=https://api.openai.com/v1
 
 # Optional if llama-server was started with API-key enforcement
 LLAMACPP_API_KEY=sk-no-key-required
 
 # Required when BACKEND=openrouter or you want /compare
 OPENROUTER_API_KEY=sk-or-...
+
+# Required when BACKEND=openai
+OPENAI_API_KEY=sk-...
 
 # Approval policy: always (default) | never | dangerous-only
 APPROVAL_POLICY=always
@@ -515,7 +521,7 @@ runtime.
                 |     backends.rs         |
                 |  Ollama / LM Studio /   |
                 |  MLX / llama.cpp /      |
-                |  OpenRouter             |
+                |  OpenRouter / OpenAI    |
                 +-------------------------+
                              |
                              v
@@ -540,7 +546,7 @@ Project layout:
 src/
   main.rs             entry — input loop, loader, approval wiring, warmup
   agent.rs            chat/completions runner with tool calls + streaming
-  backends.rs         Ollama / LM Studio / MLX / llama.cpp / OpenRouter endpoints + defaults
+  backends.rs         Ollama / LM Studio / MLX / llama.cpp / OpenRouter / OpenAI endpoints + defaults
   config.rs           dotenv + agent.config.json loader, workspace/context/history/memory config
   context_guard.rs    model-aware prompt limits, auto-compaction, and deterministic trim fallback
   budget.rs           prompt byte/token budgeting helpers
@@ -599,6 +605,8 @@ named backend is not listening on the expected port. Suggestions:
 - **llama.cpp**: start `llama-server -m /path/to/model.gguf --host 127.0.0.1 --port 8080`.
   Add `--jinja` when you want native OpenAI-style tool calls.
 - **OpenRouter**: set `OPENROUTER_API_KEY` in `.env`.
+- **OpenAI**: set `OPENAI_API_KEY` in `.env`. Use `OPENAI_BASE_URL` to point
+  at an OpenAI-compatible proxy instead of `api.openai.com`.
 
 For backend-specific capability problems, run `/doctor --deep`. It exercises
 `/v1/models`, streaming chat completions, usage chunks, a harmless tool-call

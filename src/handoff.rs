@@ -33,7 +33,7 @@ pub struct HandoffContext {
 }
 
 pub fn should_refuse_cloud_handoff(backend: BackendName, allow_cloud: bool) -> bool {
-    matches!(backend, BackendName::Openrouter) && !allow_cloud
+    !backend.is_local() && !allow_cloud
 }
 
 pub fn default_export_path(session_dir: &str) -> PathBuf {
@@ -494,9 +494,11 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_requires_explicit_cloud_flag() {
+    fn cloud_backends_require_explicit_cloud_flag() {
         assert!(should_refuse_cloud_handoff(BackendName::Openrouter, false));
         assert!(!should_refuse_cloud_handoff(BackendName::Openrouter, true));
+        assert!(should_refuse_cloud_handoff(BackendName::OpenAi, false));
+        assert!(!should_refuse_cloud_handoff(BackendName::OpenAi, true));
         assert!(!should_refuse_cloud_handoff(BackendName::Ollama, false));
     }
 

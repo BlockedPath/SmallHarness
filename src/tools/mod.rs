@@ -215,6 +215,25 @@ pub fn is_mutation_tool(name: &str) -> bool {
     mutation_tool_names().contains(&name)
 }
 
+/// Built-in tools that only read state and have no side effects on the
+/// workspace, so the agent loop can safely run several of them concurrently
+/// within a single step. `shell` and `run_tests` are excluded (they can mutate
+/// or run arbitrary commands), as are MCP tools (unknown side effects).
+pub fn read_only_tool_names() -> &'static [&'static str] {
+    &[
+        "file_read",
+        "grep",
+        "list_dir",
+        "glob",
+        "repo_search",
+        "ship_status",
+    ]
+}
+
+pub fn is_read_only_tool(name: &str) -> bool {
+    read_only_tool_names().contains(&name)
+}
+
 pub fn build_tools_for_names(config: &AgentConfig, names: &[String]) -> Vec<Arc<dyn Tool>> {
     let approve_writes = config.approval_policy != ApprovalPolicy::Never;
     let path_policy = PathPolicy::new(&config.workspace_root, config.outside_workspace);
@@ -354,6 +373,27 @@ mod tests {
     fn batch_edit_apply_counts_as_mutation() {
         let output = r#"{"preview":{},"applied":true,"successful":["a.rs"],"failed":[]}"#;
         assert!(tool_output_mutated_workspace("batch_edit", output));
+    }
+
+    #[test]
+    fn read_only_classifier_excludes_side_effecting_tools() {
+        assert!(is_read_only_tool("file_read"));
+        assert!(is_read_only_tool("grep"));
+        assert!(is_read_only_tool("repo_search"));
+        // Side-effecting or arbitrary-command tools are never parallelized.
+        assert!(!is_read_only_tool("shell"));
+        assert!(!is_read_only_tool("run_tests"));
+        assert!(!is_read_only_tool("file_edit"));
+        // MCP and unknown tools are not in the safe set.
+        assert!(!is_read_only_tool("mcp__fs__read_file"));
+        assert!(!is_read_only_tool("web_fetch"));
+    }
+
+    #[test]
+    fn mutation_and_read_only_sets_are_disjoint() {
+        for m in mutation_tool_names() {
+            assert!(!is_read_only_tool(m), "{m} must not be read-only");
+        }
     }
 
     #[test]

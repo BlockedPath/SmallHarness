@@ -13,7 +13,7 @@ use crate::openai::{
     stream_chat, ChatMessage, ChatRequest, StreamOptions, ToolCall, ToolDef, ToolDefFunction,
     ToolFunction,
 };
-use crate::tools::{is_mutation_tool, Tool, ToolPreview};
+use crate::tools::{is_mutation_tool, is_read_only_tool, Tool, ToolPreview};
 use crate::turn_checkpoint::TurnCapturer;
 
 #[derive(Debug, Clone)]
@@ -306,6 +306,28 @@ where
             break;
         }
 
+        // Tool execution proceeds in three phases so that read-only calls in a
+        // single step can run concurrently while mutations stay strictly serial:
+        //   1. Resolve approvals and capture mutation snapshots, in order. This
+        //      phase is interactive and borrows `approve`/`capturer`, so it must
+        //      stay sequential.
+        //   2. Execute. Read-only tools are polled concurrently; mutations and
+        //      other side-effecting tools (shell, run_tests, MCP) run serially in
+        //      call order.
+        //   3. Emit ToolResult events and push tool messages in call order.
+        enum Pending {
+            /// Output already determined (denial or unknown tool); skip execution.
+            Done(String),
+            Run {
+                tool: Arc<dyn Tool>,
+                args: Value,
+                read_only: bool,
+            },
+        }
+
+        let mut tcs: Vec<ToolCall> = Vec::with_capacity(final_calls.len());
+        let mut pending: Vec<Pending> = Vec::with_capacity(final_calls.len());
+
         for tc in final_calls {
             let parsed_args: Value = serde_json::from_str(&tc.function.arguments)
                 .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
@@ -315,7 +337,7 @@ where
                 args: parsed_args.clone(),
             });
 
-            let output_str: String = if let Some(tool) = tool_map.get(&tc.function.name) {
+            let entry = if let Some(tool) = tool_map.get(&tc.function.name) {
                 let needs_approval = tool.require_approval(&parsed_args);
                 let mut denied = false;
                 if needs_approval {
@@ -332,40 +354,84 @@ where
                     }
                 }
                 if denied {
-                    let denied_str = serde_json::to_string(
-                        &serde_json::json!({"error": "User denied execution."}),
+                    Pending::Done(
+                        serde_json::to_string(&serde_json::json!({
+                            "error": "User denied execution."
+                        }))
+                        .unwrap(),
                     )
-                    .unwrap();
-                    on_event(AgentEvent::ToolResult {
-                        name: tc.function.name.clone(),
-                        call_id: tc.id.clone(),
-                        output: denied_str.clone(),
-                    });
-                    messages.push(ChatMessage::Tool {
-                        tool_call_id: tc.id.clone(),
-                        content: denied_str,
-                    });
-                    continue;
-                }
-                if is_mutation_tool(&tc.function.name) {
-                    if let Some(c) = capturer.as_deref_mut() {
-                        c.snapshot_before_tool(&tc.function.name, &parsed_args)
-                            .await;
+                } else {
+                    if is_mutation_tool(&tc.function.name) {
+                        if let Some(c) = capturer.as_deref_mut() {
+                            c.snapshot_before_tool(&tc.function.name, &parsed_args)
+                                .await;
+                        }
+                    }
+                    Pending::Run {
+                        tool: tool.clone(),
+                        args: parsed_args,
+                        read_only: is_read_only_tool(&tc.function.name),
                     }
                 }
-                let result = tool.execute_cancelable(parsed_args, cancel.clone()).await;
-                if let Some(s) = result.as_str() {
-                    s.to_string()
-                } else {
-                    serde_json::to_string(&result).unwrap_or_else(|_| "null".into())
-                }
             } else {
-                serde_json::to_string(&serde_json::json!({
-                    "error": format!("Unknown tool: {}", tc.function.name)
-                }))
-                .unwrap()
+                Pending::Done(
+                    serde_json::to_string(&serde_json::json!({
+                        "error": format!("Unknown tool: {}", tc.function.name)
+                    }))
+                    .unwrap(),
+                )
             };
+            tcs.push(tc);
+            pending.push(entry);
+        }
 
+        fn value_to_string(result: &Value) -> String {
+            if let Some(s) = result.as_str() {
+                s.to_string()
+            } else {
+                serde_json::to_string(result).unwrap_or_else(|_| "null".into())
+            }
+        }
+
+        let mut outputs: Vec<Option<String>> = (0..pending.len()).map(|_| None).collect();
+        let mut read_idx: Vec<usize> = Vec::new();
+        let mut read_futs = Vec::new();
+        let mut serial: Vec<(usize, Arc<dyn Tool>, Value)> = Vec::new();
+
+        for (i, entry) in pending.into_iter().enumerate() {
+            match entry {
+                Pending::Done(out) => outputs[i] = Some(out),
+                Pending::Run {
+                    tool,
+                    args,
+                    read_only: true,
+                } => {
+                    let c = cancel.clone();
+                    read_idx.push(i);
+                    read_futs
+                        .push(async move { value_to_string(&tool.execute_cancelable(args, c).await) });
+                }
+                Pending::Run {
+                    tool,
+                    args,
+                    read_only: false,
+                } => serial.push((i, tool, args)),
+            }
+        }
+
+        if !read_futs.is_empty() {
+            let results = futures_util::future::join_all(read_futs).await;
+            for (i, out) in read_idx.into_iter().zip(results) {
+                outputs[i] = Some(out);
+            }
+        }
+
+        for (i, tool, args) in serial {
+            outputs[i] = Some(value_to_string(&tool.execute_cancelable(args, cancel.clone()).await));
+        }
+
+        for (tc, output) in tcs.into_iter().zip(outputs) {
+            let output_str = output.unwrap_or_else(|| "null".into());
             let trimmed = compact_tool_output(&tc.function.name, &output_str);
             on_event(AgentEvent::ToolResult {
                 name: tc.function.name.clone(),

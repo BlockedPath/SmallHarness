@@ -454,6 +454,9 @@ const SYSTEM_PROMPT: &str = concat!(
     "- For a task that takes 3 or more steps, call update_plan first with the\n",
     "  full plan, then call it again to mark each step done as you finish it.\n",
     "  Keep exactly one step in_progress. Skip the plan for trivial one-shot tasks.\n",
+    "- When a question needs reading lots of files to answer (\"where is X\n",
+    "  handled?\"), delegate it to the read-only `task` subagent so the\n",
+    "  exploration stays out of your context; act on the summary it returns.\n",
     "\n",
     "Current working directory: {cwd}",
 );
@@ -481,6 +484,7 @@ impl Default for AgentConfig {
                 "list_dir".into(),
                 "repo_search".into(),
                 "update_plan".into(),
+                "task".into(),
             ],
             tool_selection: ToolSelection::Auto,
             display: DisplayConfig::default(),

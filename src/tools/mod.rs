@@ -19,6 +19,7 @@ mod repo_search;
 mod run_tests;
 mod shell;
 mod ship_status;
+mod subagent;
 mod update_plan;
 mod web_fetch;
 
@@ -36,6 +37,7 @@ pub use repo_search::RepoSearchTool;
 pub use run_tests::RunTestsTool;
 pub use shell::ShellTool;
 pub use ship_status::ShipStatusTool;
+pub use subagent::SubagentTool;
 pub use update_plan::UpdatePlanTool;
 pub use web_fetch::WebFetchTool;
 
@@ -163,6 +165,9 @@ pub fn select_tool_names(config: &AgentConfig, prompt: &str) -> Vec<String> {
         push_if_enabled(&mut out, config, "grep");
         push_if_enabled(&mut out, config, "list_dir");
         push_if_enabled(&mut out, config, "glob");
+        // Delegated read-only investigation keeps deep exploration out of the
+        // parent context.
+        push_if_enabled(&mut out, config, "task");
     }
     if editish {
         push_if_enabled(&mut out, config, "file_edit");
@@ -288,6 +293,24 @@ pub fn build_tools_for_names(config: &AgentConfig, names: &[String]) -> Vec<Arc<
                 workspace_root: config.workspace_root.clone(),
             })),
             "update_plan" => Some(Arc::new(UpdatePlanTool)),
+            "task" => {
+                // The subagent resolves its own backend/model from config so it
+                // can run an independent loop. Its toolset is curated read-only
+                // (see SubagentTool), so this never recurses into another `task`.
+                let backend = crate::backends::backend(config.backend);
+                let model = crate::backends::default_model(
+                    &backend,
+                    &config.profile,
+                    config.model_override.as_deref(),
+                    &config.profiles,
+                );
+                Some(Arc::new(SubagentTool {
+                    http: reqwest::Client::new(),
+                    backend,
+                    model,
+                    config: config.clone(),
+                }))
+            }
             "web_fetch" => Some(Arc::new(WebFetchTool {
                 http: reqwest::Client::new(),
             })),

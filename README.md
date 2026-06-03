@@ -178,7 +178,7 @@ OpenRouter defaults to `qwen/qwen-2.5-coder-32b-instruct`; OpenAI defaults to
 |-------|-------|
 | Read | `file_read`, `grep`, `list_dir`, `glob`, `repo_search` |
 | Mutate (approval-gated) | `file_write`, `file_edit`, `apply_patch`, `batch_edit`, `shell` |
-| Workflow | `run_tests`, `ship_status`, `web_fetch`, `update_plan` |
+| Workflow | `run_tests`, `ship_status`, `web_fetch`, `update_plan`, `task` |
 | MCP | anything an MCP server exposes, surfaced as `mcp__<server>__<tool>` |
 
 Each tool definition costs prompt-eval time on small local models. The

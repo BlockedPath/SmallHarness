@@ -44,6 +44,10 @@ fn formatter_for(name: &str, args: &Value) -> String {
             let s = args.get("path").and_then(Value::as_str).unwrap_or(".");
             format!("path={}", trunc(s, 50))
         }
+        "task" => {
+            let s = args.get("task").and_then(Value::as_str).unwrap_or("");
+            trunc(s, 60)
+        }
         _ => default_format(args),
     }
 }
@@ -70,6 +74,7 @@ fn label_past(name: &str) -> &'static str {
         "glob" => "Explored",
         "grep" => "Searched",
         "list_dir" => "Listed",
+        "task" => "Delegated",
         _ => "Used",
     }
 }
@@ -108,6 +113,10 @@ fn summarize_output(output: &str) -> String {
                 "entries"
             };
             return format!("{n} {kind}");
+        }
+        if let Some(summary) = parsed.get("summary").and_then(Value::as_str) {
+            let first_line = summary.split('\n').next().unwrap_or("");
+            return trunc(first_line, 60);
         }
         if parsed.get("written").is_some() {
             let bytes = parsed.get("bytes").and_then(Value::as_u64).unwrap_or(0);

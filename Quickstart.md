@@ -158,43 +158,43 @@ Good habits:
 Different local models vary a lot. Small Harness can probe model capabilities,
 cache the results, benchmark latency, and recommend the best cached fit.
 
-Start with a hardware-aware recommendation:
+Everything lives under `/doctor`. Start with a hardware-aware recommendation:
 
 ```text
-/recommend
+/doctor recommend
 ```
 
 This reads a safe summary of your Mac, ranks installed/default/cached models for
 coding-agent use, and shows the top choices. To refresh probes before ranking:
 
 ```text
-/recommend refresh
+/doctor recommend refresh
 ```
 
 Run:
 
 ```text
 /doctor --deep
-/bench
-/capabilities
+/doctor bench
+/doctor models
 ```
 
 If you have multiple backends running, probe them all:
 
 ```text
-/capabilities refresh all
+/doctor models refresh all
 ```
 
 Then ask for a recommendation:
 
 ```text
-/autotune
+/doctor autotune
 ```
 
 Apply the recommendation to the current session:
 
 ```text
-/recommend apply
+/doctor recommend apply
 ```
 
 What Small Harness is checking:
@@ -208,11 +208,11 @@ What Small Harness is checking:
 - first-token latency
 - estimated output tokens per second
 
-By default, `/recommend` prefers local backends. To let OpenRouter compete with
-local models, use:
+By default, `/doctor recommend` prefers local backends. To let OpenRouter
+compete with local models, use:
 
 ```text
-/recommend --cloud
+/doctor recommend --cloud
 ```
 
 Long coding sessions on small local models can fill the context window quickly.
@@ -244,10 +244,10 @@ Here is a simple sequence that exercises the whole product:
 Give me a concise map of this repo.
 /index status
 /doctor --deep
-/bench
-/recommend
-/capabilities
-/autotune
+/doctor bench
+/doctor recommend
+/doctor models
+/doctor autotune
 Find one small README improvement and propose the exact diff before editing.
 ```
 
@@ -319,5 +319,5 @@ Small Harness keeps local state under `.sessions/`:
   capabilities/          per-model capability and benchmark cache
 ```
 
-That local cache powers `/recommend`, `/capabilities`, `/autotune`, `/map`, and
+That local cache powers `/doctor recommend`, `/doctor models`, `/doctor autotune`, `/map`, and
 `repo_search`.

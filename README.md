@@ -161,11 +161,14 @@ OpenRouter defaults to `qwen/qwen-2.5-coder-32b-instruct`; OpenAI defaults to
 
 ### Recommend the right model for your box
 
+All model-tuning lives under `/doctor`:
+
 ```
-/recommend           rank installed + default + cached models for your hardware
-/autotune apply      switch to the top-scoring cached local model
-/doctor --deep       probe streaming, usage chunks, tool calls, fallbacks
-/bench               measure warmup, first-token, and total latency
+/doctor recommend       rank installed + default + cached models for your hardware
+/doctor autotune apply  switch to the top-scoring cached local model
+/doctor --deep          probe streaming, usage chunks, tool calls, fallbacks
+/doctor bench           measure warmup, first-token, and total latency
+/doctor models          show cached per-model capability + benchmark records
 ```
 
 ---
@@ -247,10 +250,10 @@ this exact call`. The session cache resets on `/new`.
 /context               show prompt budget, model limit, auto-guard status
 /compact               summarize older turns (auto-runs at threshold)
 /doctor [--deep]       probe backend, tools, streaming, capabilities
-/capabilities          show cached per-model capability + benchmark records
-/autotune              pick the best cached local model
-/recommend             rank models for your hardware
-/bench                 measure warmup + first-token + total latency
+/doctor models         show cached per-model capability + benchmark records
+/doctor autotune       pick the best cached local model (add `apply` to switch)
+/doctor recommend      rank models for your hardware
+/doctor bench          measure warmup + first-token + total latency
 /checkpoints           toggle per-turn snapshots
 ```
 

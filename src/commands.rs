@@ -147,16 +147,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Show or update context limits and auto-guard status",
     ),
     ("/compact", "Summarize or trim older conversation turns"),
-    ("/doctor", "Check backend, tools, env, and session storage"),
-    ("/bench", "Measure warmup, first-token, and total latency"),
-    ("/capabilities", "Show or refresh model capability cache"),
     (
-        "/autotune",
-        "Recommend and optionally apply the best cached model",
-    ),
-    (
-        "/recommend",
-        "Recommend a model from hardware, installed models, and cached probes",
+        "/doctor",
+        "Probe backend/tools/env; subcommands: recommend, bench, models, autotune",
     ),
     ("/index", "Build, refresh, show, or clear project memory"),
     ("/map", "Print the project memory repo map or focused hits"),
@@ -225,10 +218,6 @@ pub async fn dispatch(input: &str, state: &mut AppState) -> Result<()> {
         "/context" => cmd_context(&args, state),
         "/compact" => cmd_compact(&args, state).await?,
         "/doctor" => cmd_doctor(&args, state).await?,
-        "/bench" => cmd_bench(&args, state).await?,
-        "/capabilities" => cmd_capabilities(&args, state).await?,
-        "/autotune" => cmd_autotune(&args, state).await?,
-        "/recommend" => cmd_recommend(&args, state).await?,
         "/index" => cmd_index(&args, state)?,
         "/map" => cmd_map(&args, state)?,
         "/memory" => cmd_memory(&args, state),
@@ -241,11 +230,23 @@ pub async fn dispatch(input: &str, state: &mut AppState) -> Result<()> {
         "/prompt" => cmd_prompt(&args, state).await?,
         "/play" => cmd_play(&args, state).await?,
         "/fix" => cmd_fix(&args, state).await?,
+        // These model-tuning commands were folded into `/doctor` subcommands.
+        "/bench" => redirect_to_doctor("/bench", "bench"),
+        "/capabilities" => redirect_to_doctor("/capabilities", "models"),
+        "/autotune" => redirect_to_doctor("/autotune", "autotune"),
+        "/recommend" => redirect_to_doctor("/recommend", "recommend"),
         other => {
             println!("  {DIM}Unknown command: {other}. Type /help.{RESET}");
         }
     }
     Ok(())
+}
+
+/// One-liner shown when someone types an old top-level command that is now a
+/// `/doctor` subcommand. Keeps muscle memory working without re-listing the
+/// commands in `/help`.
+fn redirect_to_doctor(old: &str, sub: &str) {
+    println!("  {DIM}{old} is now {CYAN}/doctor {sub}{RESET}{DIM}. Run that instead.{RESET}");
 }
 
 fn help() {
@@ -2044,7 +2045,27 @@ async fn cmd_compact(args: &str, state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_doctor(args: &str, state: &AppState) -> Result<()> {
+/// `/doctor` is the single entry point for backend probing and model tuning.
+/// Subcommands route to the dedicated handlers; bare `/doctor` (and the probe
+/// flags `--deep` / `all`) run the connectivity probe.
+async fn cmd_doctor(args: &str, state: &mut AppState) -> Result<()> {
+    let sub = args.split_whitespace().next().unwrap_or("");
+    let rest = args.strip_prefix(sub).unwrap_or("").trim();
+    match sub {
+        "" | "--deep" | "deep" | "all" => cmd_doctor_probe(args, state).await,
+        "recommend" => cmd_recommend(rest, state).await,
+        "autotune" => cmd_autotune(rest, state).await,
+        "bench" => cmd_bench(rest, state).await,
+        "models" | "capabilities" | "caps" => cmd_capabilities(rest, state).await,
+        other => {
+            println!("  {DIM}Unknown /doctor subcommand: {other}{RESET}");
+            println!("  {DIM}Try: {CYAN}/doctor{RESET}{DIM} [--deep], {CYAN}/doctor recommend{RESET}{DIM}, {CYAN}/doctor bench{RESET}{DIM}, {CYAN}/doctor models{RESET}{DIM}, {CYAN}/doctor autotune [apply]{RESET}");
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_doctor_probe(args: &str, state: &AppState) -> Result<()> {
     let deep = args
         .split_whitespace()
         .any(|arg| arg == "--deep" || arg == "deep");
@@ -2721,7 +2742,7 @@ async fn cmd_capabilities(args: &str, state: &AppState) -> Result<()> {
     let records = capabilities::load_records(&state.session_dir)?;
     if records.is_empty() {
         println!(
-            "  {DIM}No cached capabilities yet. Run /capabilities refresh or /doctor --deep all.{RESET}"
+            "  {DIM}No cached capabilities yet. Run /doctor models refresh or /doctor --deep all.{RESET}"
         );
         return Ok(());
     }
@@ -2754,11 +2775,11 @@ async fn cmd_autotune(args: &str, state: &mut AppState) -> Result<()> {
     let Some(recommendation) = best_record(&records, include_cloud) else {
         if records.iter().any(CapabilityRecord::is_cloud) && !include_cloud {
             println!(
-                "  {DIM}Only cloud-capable cached records were found. Re-run with /autotune --cloud to include them.{RESET}"
+                "  {DIM}Only cloud-capable cached records were found. Re-run with /doctor autotune --cloud to include them.{RESET}"
             );
         } else {
             println!(
-                "  {DIM}No usable cached model yet. Run /autotune refresh all after starting your local backends.{RESET}"
+                "  {DIM}No usable cached model yet. Run /doctor autotune refresh all after starting your local backends.{RESET}"
             );
         }
         return Ok(());
@@ -2790,7 +2811,7 @@ async fn cmd_autotune(args: &str, state: &mut AppState) -> Result<()> {
     }
 
     if !apply {
-        println!("  {DIM}Run /autotune apply to switch this session to the recommendation.{RESET}");
+        println!("  {DIM}Run /doctor autotune apply to switch this session to the recommendation.{RESET}");
         return Ok(());
     }
 
@@ -3033,7 +3054,7 @@ async fn cmd_recommend(args: &str, state: &mut AppState) -> Result<()> {
     let candidates = collect_recommendation_candidates(state, &spec, all, include_cloud).await?;
     let recommendations = recommend_models(&spec, candidates, include_cloud);
     if recommendations.is_empty() {
-        println!("  {DIM}No model candidates found. Start a local backend, then rerun /recommend refresh.{RESET}");
+        println!("  {DIM}No model candidates found. Start a local backend, then rerun /doctor recommend refresh.{RESET}");
         return Ok(());
     }
 
@@ -3055,7 +3076,7 @@ async fn cmd_recommend(args: &str, state: &mut AppState) -> Result<()> {
 
     if !apply {
         println!(
-            "  {DIM}Run /recommend apply to switch this session to the top recommendation.{RESET}"
+            "  {DIM}Run /doctor recommend apply to switch this session to the top recommendation.{RESET}"
         );
         return Ok(());
     }

@@ -21,13 +21,60 @@ struct Edit {
     new_text: String,
 }
 
+/// Locate the line span that changed between `original` and `updated`, as a
+/// half-open `[start, end)` range of 0-based line indices into `updated`.
+/// Returns `None` when nothing changed. Uses a common prefix/suffix scan, so a
+/// small edit in a large file yields a small span.
+fn changed_line_span(original: &str, updated: &str) -> Option<(usize, usize)> {
+    let o: Vec<&str> = original.lines().collect();
+    let u: Vec<&str> = updated.lines().collect();
+    if o == u {
+        return None;
+    }
+    let max_pre = o.len().min(u.len());
+    let mut pre = 0;
+    while pre < max_pre && o[pre] == u[pre] {
+        pre += 1;
+    }
+    let max_suf = (o.len() - pre).min(u.len() - pre);
+    let mut suf = 0;
+    while suf < max_suf && o[o.len() - 1 - suf] == u[u.len() - 1 - suf] {
+        suf += 1;
+    }
+    let start = pre;
+    // Show at least one line so a pure deletion still anchors somewhere.
+    let end = u.len().saturating_sub(suf).max(start + 1).min(u.len());
+    Some((start, end))
+}
+
+/// Render a line-numbered snippet of `content` covering `[start, end)` plus a
+/// few lines of context on each side. Capped so a huge edit can't flood the
+/// model's context.
+fn numbered_snippet(content: &str, start: usize, end: usize, context: usize) -> String {
+    const MAX_LINES: usize = 30;
+    let lines: Vec<&str> = content.lines().collect();
+    let from = start.saturating_sub(context);
+    let full_to = (end + context).min(lines.len());
+    let truncated = full_to.saturating_sub(from) > MAX_LINES;
+    let to = if truncated { from + MAX_LINES } else { full_to };
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate().take(to).skip(from) {
+        out.push_str(&format!("{:>5}  {}\n", i + 1, line));
+    }
+    if truncated {
+        out.push_str("…[snippet truncated]\n");
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
 #[async_trait]
 impl Tool for FileEditTool {
     fn name(&self) -> &'static str {
         "file_edit"
     }
     fn description(&self) -> &'static str {
-        "Apply search-and-replace edits to a file. Each old_text must appear exactly once. Returns a unified diff."
+        "Apply search-and-replace edits to a file. Each old_text must appear exactly once. Returns a unified diff plus the re-read applied state (verified + a line-numbered snippet) so you can confirm the change landed."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -136,10 +183,22 @@ impl Tool for FileEditTool {
         if let Err(e) = tokio::fs::write(&resolved.normalized, working.as_bytes()).await {
             return json!({ "error": e.to_string() });
         }
+        // Re-read from disk so the model sees the actually-applied state, not an
+        // assumption. `verified` is false if what landed on disk differs from
+        // what we intended to write (e.g. a concurrent writer or odd encoding).
+        let on_disk = tokio::fs::read_to_string(&resolved.normalized)
+            .await
+            .unwrap_or_else(|_| working.clone());
+        let verified = on_disk == working;
+        let applied_snippet = changed_line_span(&original, &on_disk)
+            .map(|(start, end)| numbered_snippet(&on_disk, start, end, 3))
+            .unwrap_or_default();
         json!({
             "edited": true,
             "path": path,
             "diff": unified_diff(&original, &working, &path),
+            "verified": verified,
+            "applied_snippet": applied_snippet,
         })
     }
 }
@@ -182,6 +241,31 @@ mod tests {
         assert!(d.starts_with("--- /abs/path/foo.rs\n+++ /abs/path/foo.rs"));
     }
 
+    #[test]
+    fn changed_span_none_when_identical() {
+        assert_eq!(changed_line_span("a\nb\nc", "a\nb\nc"), None);
+    }
+
+    #[test]
+    fn changed_span_is_tight_around_single_edit() {
+        // Only line index 2 changes in a 5-line file.
+        let original = "a\nb\nc\nd\ne";
+        let updated = "a\nb\nC\nd\ne";
+        assert_eq!(changed_line_span(original, updated), Some((2, 3)));
+    }
+
+    #[test]
+    fn numbered_snippet_uses_one_based_line_numbers_and_context() {
+        let content = "a\nb\nc\nd\ne";
+        // changed line index 2 (=line 3), context 1 → lines 2..=4
+        let snip = numbered_snippet(content, 2, 3, 1);
+        assert!(snip.contains("    2  b"));
+        assert!(snip.contains("    3  c"));
+        assert!(snip.contains("    4  d"));
+        assert!(!snip.contains("    1  a"));
+        assert!(!snip.contains("    5  e"));
+    }
+
     #[tokio::test]
     async fn applies_unique_replacement() {
         let dir = tempfile::tempdir().unwrap();
@@ -199,6 +283,10 @@ mod tests {
         .await;
 
         assert!(result["edited"].as_bool().unwrap());
+        // Re-read verification confirms the write landed and surfaces the
+        // applied region back to the model.
+        assert_eq!(result["verified"].as_bool(), Some(true));
+        assert!(result["applied_snippet"].as_str().unwrap().contains("BETA"));
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert_eq!(content, "alpha\nBETA\ngamma");
     }

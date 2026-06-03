@@ -123,6 +123,9 @@ fn summarize_output(output: &str) -> String {
             return format!("wrote {bytes} bytes");
         }
         if parsed.get("edited").is_some() {
+            if parsed.get("verified").and_then(Value::as_bool) == Some(false) {
+                return format!("{YELLOW}edited (unverified — disk differs){RESET}");
+            }
             return "edited".to_string();
         }
         if let Some(code) = parsed.get("exitCode").and_then(Value::as_i64) {

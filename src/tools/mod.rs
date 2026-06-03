@@ -19,6 +19,7 @@ mod repo_search;
 mod run_tests;
 mod shell;
 mod ship_status;
+mod update_plan;
 mod web_fetch;
 
 pub use apply_patch_tool::{patch_changed_files, ApplyPatchTool};
@@ -35,6 +36,7 @@ pub use repo_search::RepoSearchTool;
 pub use run_tests::RunTestsTool;
 pub use shell::ShellTool;
 pub use ship_status::ShipStatusTool;
+pub use update_plan::UpdatePlanTool;
 pub use web_fetch::WebFetchTool;
 
 /// Base64-encode raw bytes for use in a data URL (e.g. `data:image/png;base64,...`).
@@ -167,6 +169,10 @@ pub fn select_tool_names(config: &AgentConfig, prompt: &str) -> Vec<String> {
         push_if_enabled(&mut out, config, "apply_patch");
         push_if_enabled(&mut out, config, "file_write");
     }
+    // Multi-step work (editing or running things) benefits from a visible plan.
+    if editish || shellish {
+        push_if_enabled(&mut out, config, "update_plan");
+    }
     if shellish {
         push_if_enabled(&mut out, config, "shell");
     }
@@ -281,6 +287,7 @@ pub fn build_tools_for_names(config: &AgentConfig, names: &[String]) -> Vec<Arc<
             "ship_status" => Some(Arc::new(ShipStatusTool {
                 workspace_root: config.workspace_root.clone(),
             })),
+            "update_plan" => Some(Arc::new(UpdatePlanTool)),
             "web_fetch" => Some(Arc::new(WebFetchTool {
                 http: reqwest::Client::new(),
             })),

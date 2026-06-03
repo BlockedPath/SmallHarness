@@ -451,6 +451,9 @@ const SYSTEM_PROMPT: &str = concat!(
     "When working with code:\n",
     "- Make minimal targeted edits consistent with existing style.\n",
     "- Be concise. The user can read the diff.\n",
+    "- For a task that takes 3 or more steps, call update_plan first with the\n",
+    "  full plan, then call it again to mark each step done as you finish it.\n",
+    "  Keep exactly one step in_progress. Skip the plan for trivial one-shot tasks.\n",
     "\n",
     "Current working directory: {cwd}",
 );
@@ -477,6 +480,7 @@ impl Default for AgentConfig {
                 "grep".into(),
                 "list_dir".into(),
                 "repo_search".into(),
+                "update_plan".into(),
             ],
             tool_selection: ToolSelection::Auto,
             display: DisplayConfig::default(),

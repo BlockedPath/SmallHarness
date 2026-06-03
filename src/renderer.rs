@@ -257,6 +257,13 @@ impl TuiRenderer {
         if matches!(self.display.tool_display, ToolDisplay::Hidden) {
             return;
         }
+        // The plan is rendered as a checklist at call time (the args carry the
+        // plan), independent of the configured tool display style, and never
+        // routed through the grouped/minimal batching.
+        if name == "update_plan" {
+            self.render_plan(&args);
+            return;
+        }
         self.end_streaming();
         self.tool_start.insert(call_id.to_string(), Instant::now());
 
@@ -287,8 +294,43 @@ impl TuiRenderer {
         }
     }
 
+    /// Draw the model's task plan as a checklist box. Flushes any in-flight
+    /// grouped/minimal output first so the plan sits on its own.
+    fn render_plan(&mut self, args: &Value) {
+        self.flush_grouped();
+        self.flush_minimal();
+        self.end_streaming();
+        let Some(steps) = args.get("steps").and_then(Value::as_array) else {
+            return;
+        };
+        if steps.is_empty() {
+            return;
+        }
+        let done = steps
+            .iter()
+            .filter(|s| s.get("status").and_then(Value::as_str) == Some("done"))
+            .count();
+        println!("{GREEN}●{RESET} {BOLD}Plan{RESET} {DIM}({done}/{} done){RESET}", steps.len());
+        for s in steps {
+            let text = s.get("step").and_then(Value::as_str).unwrap_or("");
+            let status = s.get("status").and_then(Value::as_str).unwrap_or("pending");
+            let (mark, body) = match status {
+                "done" => (format!("{GREEN}✔{RESET}"), format!("{DIM}{text}{RESET}")),
+                "in_progress" => (format!("{YELLOW}▸{RESET}"), format!("{BOLD}{text}{RESET}")),
+                _ => (format!("{GRAY}☐{RESET}"), format!("{GRAY}{text}{RESET}")),
+            };
+            println!("  {mark} {body}");
+        }
+        println!();
+    }
+
     fn render_tool_result(&mut self, name: &str, call_id: &str, output: &str) {
         if matches!(self.display.tool_display, ToolDisplay::Hidden) {
+            return;
+        }
+        // The plan was already drawn at call time; its result carries no new
+        // information for the user.
+        if name == "update_plan" {
             return;
         }
         let ms = self

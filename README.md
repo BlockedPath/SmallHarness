@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="#install">Install</a> &middot;
+  <a href="#run-it">Run it</a> &middot;
   <a href="#first-session">First session</a> &middot;
   <a href="#backends">Backends</a> &middot;
   <a href="#tools-and-commands">Tools &amp; commands</a> &middot;
@@ -28,10 +29,11 @@
 
 ## What it is
 
-A coding agent that lives in your terminal. It points at local models
-(Ollama, LM Studio, MLX, llama.cpp) or hits OpenAI / OpenRouter directly
-with your own key. It ships with the usual tool kit — read, edit, grep,
-shell, run tests — plus a few that aren't usual:
+A coding agent that lives in your terminal. Bring your own **API key**
+(OpenAI or OpenRouter) or point it at a **local model** (Ollama, LM Studio,
+MLX, llama.cpp) — same tools, same commands, same session log either way. It
+ships with the usual tool kit — read, edit, grep, shell, run tests — plus a
+few that aren't usual:
 
 - **Six backends, one TUI.** Switch with `/backend openai`, `/backend ollama`,
   whatever. Same tools, same commands, same session log.
@@ -56,28 +58,68 @@ shell, run tests — plus a few that aren't usual:
 ## Install
 
 ```bash
-# Pre-built binary (macOS)
+# Homebrew (macOS)
 brew install getsmallai/tap/small-harness
 
 # Or from source — Rust 1.75+
 git clone https://github.com/GetSmallAI/SmallHarness.git
-cd SmallHarness && cargo run --release
+cd SmallHarness && cargo build --release   # binary at target/release/small-harness
 ```
 
-You also need a backend. Easiest is Ollama:
+---
+
+## Run it
+
+Start the app:
+
+```bash
+small-harness          # if installed via Homebrew
+# — or, from a source checkout —
+cargo run --release
+```
+
+That drops you into an interactive prompt. On the **first** launch a short
+wizard writes `agent.config.json` (backend, model, approval policy); skip it
+with `SMALL_HARNESS_NO_WIZARD=true`. After that, `small-harness` just opens a
+session.
+
+Small Harness talks to one **backend** — choose whichever you prefer. Most
+people start with a cloud key; reach for local when you want privacy or zero
+cost.
+
+### Option A — a cloud API key (fastest to start)
+
+No local model to install, frontier-model quality. Bring an OpenAI or
+OpenRouter key:
+
+```bash
+export OPENAI_API_KEY=sk-...        # or: export OPENROUTER_API_KEY=sk-or-...
+small-harness
+> /backend openai                   # or pick "openai" in the first-run wizard
+```
+
+Prefer not to use an env var? Launch first, then run `/auth set openai` and
+paste your key once — it's saved to a `0600` file under
+`~/.config/small-harness/`. Per-turn and session **cost show live** on the
+status line.
+
+### Option B — a local model (private, free, offline)
+
+Runs entirely on your machine, no key, no data leaving your laptop. Easiest is
+Ollama:
 
 ```bash
 brew install ollama
 brew services start ollama
 ollama pull qwen2.5-coder:7b
+
+small-harness                       # ollama is the default backend
 ```
 
-LM Studio, MLX, llama.cpp, OpenRouter cloud, and direct OpenAI are equally
-supported — see [Backends](#backends) for ports and notes.
+LM Studio, MLX, and llama.cpp work too — see [Backends](#backends) for ports.
 
-On first launch a short wizard writes `agent.config.json`, picks defaults
-for your hardware, and probes the backend. Skip it with
-`SMALL_HARNESS_NO_WIZARD=true`.
+Switch backends any time mid-session with `/backend <name>`, and run
+`/doctor` if something isn't connecting.
 
 ---
 

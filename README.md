@@ -60,7 +60,7 @@ shell, run tests — plus a few that aren't usual:
 ## Install
 
 ```bash
-# Pre-built binary (once tagged releases are published)
+# Pre-built binary (macOS)
 brew install getsmallai/tap/small-harness
 
 # Or from source — Rust 1.75+
@@ -559,10 +559,10 @@ Guidelines:
   `true`, or compute from args — see `shell.rs`).
 - New backends need an OpenAI-compatible `/v1/chat/completions` endpoint
   and a profile-default model map in `backends.rs`.
-- Plan-style feature builds follow the gates in
-  [`docs/INTEGRATION_MATRIX.md`](docs/INTEGRATION_MATRIX.md).
+- Before opening a PR, run the full check suite: `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
 
-Release tags use a leading `v` (`v0.3.0`). The release workflow at
+Release tags use a leading `v` (`v0.4.0`). The release workflow at
 [`.github/workflows/release.yml`](.github/workflows/release.yml) builds
 notarized macOS binaries when Apple Developer secrets are present.
 

@@ -1059,7 +1059,6 @@ async fn cmd_recommend(args: &str, state: &mut AppState) -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

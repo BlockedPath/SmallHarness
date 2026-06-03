@@ -265,7 +265,10 @@ async fn run_one_shot(opts: CliOneShot) -> anyhow::Result<()> {
                 let _ = writeln!(out, "\n{notice}");
             }
             AgentEvent::StepLimitReached { max_steps } => {
-                let _ = writeln!(out, "\n[stopped after {max_steps} steps — task may be unfinished]");
+                let _ = writeln!(
+                    out,
+                    "\n[stopped after {max_steps} steps — task may be unfinished]"
+                );
             }
             _ => {}
         },

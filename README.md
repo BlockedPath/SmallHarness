@@ -385,7 +385,7 @@ OPENROUTER_API_KEY=sk-or-...                            # required for openroute
 OPENAI_BASE_URL=https://api.openai.com/v1               # point at a compatible proxy if needed
 
 APPROVAL_POLICY=always                                  # always | dangerous-only | never
-AGENT_TOOLS=file_read,file_edit,grep,list_dir,repo_search
+AGENT_TOOLS=file_read,grep,list_dir,file_edit,shell,update_plan,task
 AGENT_TOOL_SELECTION=auto                               # auto | fixed
 
 WARMUP=true                                             # pre-warm prompt cache at startup
@@ -405,7 +405,7 @@ root. Common shape:
   "backend": "ollama",
   "profile": "mac-mini-16gb",
   "approvalPolicy": "dangerous-only",
-  "tools": ["file_read", "file_edit", "grep", "list_dir", "repo_search"],
+  "tools": ["file_read", "grep", "list_dir", "file_edit", "shell", "update_plan", "task"],
   "toolSelection": "auto",
   "maxSteps": 20,
   "workspaceRoot": "/path/to/project",

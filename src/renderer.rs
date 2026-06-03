@@ -328,7 +328,10 @@ impl TuiRenderer {
             .iter()
             .filter(|s| s.get("status").and_then(Value::as_str) == Some("done"))
             .count();
-        println!("{GREEN}●{RESET} {BOLD}Plan{RESET} {DIM}({done}/{} done){RESET}", steps.len());
+        println!(
+            "{GREEN}●{RESET} {BOLD}Plan{RESET} {DIM}({done}/{} done){RESET}",
+            steps.len()
+        );
         for s in steps {
             let text = s.get("step").and_then(Value::as_str).unwrap_or("");
             let status = s.get("status").and_then(Value::as_str).unwrap_or("pending");

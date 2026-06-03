@@ -420,8 +420,9 @@ where
                 } => {
                     let c = cancel.clone();
                     read_idx.push(i);
-                    read_futs
-                        .push(async move { value_to_string(&tool.execute_cancelable(args, c).await) });
+                    read_futs.push(async move {
+                        value_to_string(&tool.execute_cancelable(args, c).await)
+                    });
                 }
                 Pending::Run {
                     tool,
@@ -439,7 +440,9 @@ where
         }
 
         for (i, tool, args) in serial {
-            outputs[i] = Some(value_to_string(&tool.execute_cancelable(args, cancel.clone()).await));
+            outputs[i] = Some(value_to_string(
+                &tool.execute_cancelable(args, cancel.clone()).await,
+            ));
         }
 
         for (tc, output) in tcs.into_iter().zip(outputs) {

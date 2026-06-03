@@ -477,12 +477,16 @@ impl Default for AgentConfig {
                 .to_string(),
             outside_workspace: OutsideWorkspace::Prompt,
             approval_policy: ApprovalPolicy::Always,
+            // Bare-bones core: read, search, edit, run — plus the two
+            // lightweight orchestration tools (auto-selection only surfaces them
+            // when relevant). repo_search, run_tests, batch_edit, web_fetch, etc.
+            // are opt-in via /tools or config.
             tools: vec![
                 "file_read".into(),
-                "file_edit".into(),
                 "grep".into(),
                 "list_dir".into(),
-                "repo_search".into(),
+                "file_edit".into(),
+                "shell".into(),
                 "update_plan".into(),
                 "task".into(),
             ],

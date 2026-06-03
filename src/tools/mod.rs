@@ -348,23 +348,50 @@ mod tests {
             ..Default::default()
         };
         let names = select_tool_names(&config, "search the repo for config");
-        assert!(names.contains(&"repo_search".to_string()));
         assert!(names.contains(&"file_read".to_string()));
         assert!(names.contains(&"grep".to_string()));
         assert!(names.contains(&"list_dir".to_string()));
     }
 
     #[test]
-    fn auto_repo_search_requires_memory_enabled() {
+    fn repo_search_is_opt_in_not_default() {
+        // repo_search is no longer in the default pool; auto-selection can't
+        // surface it unless the user enables it.
         let config = AgentConfig {
+            tool_selection: ToolSelection::Auto,
+            ..Default::default()
+        };
+        assert!(!config.tools.contains(&"repo_search".to_string()));
+        let names = select_tool_names(&config, "search the repo for config");
+        assert!(!names.contains(&"repo_search".to_string()));
+    }
+
+    #[test]
+    fn auto_repo_search_requires_memory_enabled() {
+        // When repo_search IS enabled, auto-selection still gates it on memory.
+        let base_tools = vec![
+            "repo_search".to_string(),
+            "file_read".to_string(),
+            "grep".to_string(),
+            "list_dir".to_string(),
+        ];
+        let enabled = AgentConfig {
+            tools: base_tools.clone(),
+            ..Default::default()
+        };
+        assert!(select_tool_names(&enabled, "search the repo for config")
+            .contains(&"repo_search".to_string()));
+
+        let disabled = AgentConfig {
+            tools: base_tools,
             project_memory: crate::config::ProjectMemoryConfig {
                 enabled: false,
                 ..Default::default()
             },
             ..Default::default()
         };
-        let names = select_tool_names(&config, "search the repo for config");
-        assert!(!names.contains(&"repo_search".to_string()));
+        assert!(!select_tool_names(&disabled, "search the repo for config")
+            .contains(&"repo_search".to_string()));
     }
 
     #[test]

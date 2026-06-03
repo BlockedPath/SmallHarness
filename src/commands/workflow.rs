@@ -839,4 +839,3 @@ fn truncate_string(s: &str, max_len: usize) -> String {
         format!("{}...", &s[..max_len.saturating_sub(3)])
     }
 }
-

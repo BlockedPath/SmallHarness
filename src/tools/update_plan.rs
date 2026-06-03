@@ -77,10 +77,7 @@ impl Tool for UpdatePlanTool {
             .iter()
             .map(|s| json!({ "step": s.step, "status": normalize_status(&s.status) }))
             .collect();
-        let done = steps
-            .iter()
-            .filter(|s| s["status"] == "done")
-            .count();
+        let done = steps.iter().filter(|s| s["status"] == "done").count();
         json!({
             "plan_updated": true,
             "total": steps.len(),

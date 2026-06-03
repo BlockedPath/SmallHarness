@@ -1,10 +1,9 @@
 use anyhow::Result;
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::backends::{backend, default_model, validate, BackendName, ProfileName};
+use crate::backends::{backend, default_model, validate, BackendName};
 use crate::config::{dotenv_values, layered_env, AgentConfig, ApprovalPolicy, ToolSelection};
 use crate::hardware::{detect_hardware_spec, save_hardware_summary};
 use crate::input::plain_read_line;
@@ -57,12 +56,9 @@ pub async fn run_setup_wizard(base: &AgentConfig) -> Result<Option<AgentConfig>>
         println!("  {DIM}Setup cancelled.{RESET}");
         return Ok(None);
     };
-    let Some(profile) = prompt_profile(base).await? else {
-        println!("  {DIM}Setup cancelled.{RESET}");
-        return Ok(None);
-    };
 
-    let model_default = default_model(&backend(chosen_backend), &profile, None, &base.profiles);
+    let model_default =
+        default_model(&backend(chosen_backend), &base.profile, None, &base.profiles);
     let Some(model_override) = prompt_model(&model_default, base.model_override.as_deref()).await?
     else {
         println!("  {DIM}Setup cancelled.{RESET}");
@@ -79,7 +75,6 @@ pub async fn run_setup_wizard(base: &AgentConfig) -> Result<Option<AgentConfig>>
 
     let mut config = base.clone();
     config.backend = chosen_backend;
-    config.profile = profile;
     config.model_override = model_override;
     config.approval_policy = approval_policy;
     config.tool_selection = tool_selection;
@@ -173,51 +168,6 @@ async fn prompt_backend(default: BackendName) -> Result<Option<BackendName>> {
             return Ok(Some(parsed));
         }
         println!("  {YELLOW}!{RESET} {DIM}Unknown backend: {trimmed}{RESET}");
-    }
-}
-
-async fn prompt_profile(base: &AgentConfig) -> Result<Option<String>> {
-    let names = profile_names(base);
-    let default = if names.contains(&base.profile) {
-        base.profile.clone()
-    } else {
-        names
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "mac-mini-16gb".into())
-    };
-    loop {
-        println!("  {DIM}Hardware profile{RESET}");
-        for (idx, profile) in names.iter().enumerate() {
-            let marker = if profile == &default { " *" } else { "" };
-            println!("    {DIM}{}){RESET} {}{}", idx + 1, profile, marker);
-        }
-        let default_idx = names
-            .iter()
-            .position(|p| p == &default)
-            .map(|i| i + 1)
-            .unwrap_or(1);
-        let input =
-            plain_read_line(format!("  {DIM}Select profile [{default_idx}]:{RESET} ")).await?;
-        let trimmed = input.trim();
-        if is_cancel(trimmed) {
-            return Ok(None);
-        }
-        if trimmed.is_empty() {
-            return Ok(Some(default));
-        }
-        if names.iter().any(|p| p == trimmed) {
-            return Ok(Some(trimmed.to_string()));
-        }
-        if let Some(parsed) = trimmed
-            .parse::<usize>()
-            .ok()
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|idx| names.get(idx).cloned())
-        {
-            return Ok(Some(parsed));
-        }
-        println!("  {YELLOW}!{RESET} {DIM}Unknown profile: {trimmed}{RESET}");
     }
 }
 
@@ -387,16 +337,6 @@ async fn with_probe_timeout<T>(future: impl std::future::Future<Output = Result<
         Ok(result) => result,
         Err(_) => anyhow::bail!("timed out after 8s"),
     }
-}
-
-fn profile_names(base: &AgentConfig) -> Vec<String> {
-    let mut names: BTreeSet<String> = ProfileName::all()
-        .iter()
-        .map(|profile| profile.as_str().to_string())
-        .collect();
-    names.insert(base.profile.clone());
-    names.extend(base.profiles.keys().cloned());
-    names.into_iter().collect()
 }
 
 fn is_cancel(s: &str) -> bool {

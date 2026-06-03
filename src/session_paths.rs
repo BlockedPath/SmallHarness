@@ -1,3 +1,14 @@
+//! Session paths: branchable forks of a working session.
+//!
+//! Design note — why this is bespoke and not `git worktree`:
+//! A path snapshots the *conversation and the workspace together*
+//! (`PathSessionState` = messages + checkpoint stack + token/cost totals +
+//! conversation summary + a `WorkspaceSnapshot`). `git worktree` only branches
+//! files — it has no notion of chat history, costs, or the running summary — so
+//! it cannot model `/path fork`/`switch`/`pick`. This store also reuses the
+//! `turn_checkpoint` machinery and works in any directory, git repo or not.
+//! That coupling is the feature; keep it rather than "simplifying" to worktrees.
+
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use ignore::WalkBuilder;

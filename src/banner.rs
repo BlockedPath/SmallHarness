@@ -29,7 +29,9 @@ pub fn print_banner(info: BannerInfo<'_>) {
     println!();
     println!("{ACCENT_DEEP}{BOLD}{LOGO}{RESET}");
     println!();
-    println!("{PAD}{BOLD}Small Harness{RESET}  {MUTED}— a small, terminal-first coding harness{RESET}");
+    println!(
+        "{PAD}{BOLD}Small Harness{RESET}  {MUTED}— a small, terminal-first coding harness{RESET}"
+    );
     println!();
     println!("{}", row("backend", info.backend));
     println!("{}", row("model", info.model));

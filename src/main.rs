@@ -30,9 +30,9 @@ mod session;
 mod session_paths;
 mod session_turn;
 mod setup;
-mod theme;
 mod shipcheck;
 mod test_integration;
+mod theme;
 mod tools;
 mod turn_checkpoint;
 mod update_check;
@@ -591,7 +591,11 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 cwd
             };
-            println!("{}{}{display_cwd}{RESET}", crate::theme::PAD, crate::theme::MUTED);
+            println!(
+                "{}{}{display_cwd}{RESET}",
+                crate::theme::PAD,
+                crate::theme::MUTED
+            );
         }
 
         if trimmed == "exit" || trimmed == "quit" || trimmed == ".exit" {

@@ -67,8 +67,12 @@ pub async fn run_setup_wizard(base: &AgentConfig) -> Result<Option<AgentConfig>>
     // probe succeeds instead of failing on a missing key.
     prompt_api_key(chosen_backend).await?;
 
-    let model_default =
-        default_model(&backend(chosen_backend), &base.profile, None, &base.profiles);
+    let model_default = default_model(
+        &backend(chosen_backend),
+        &base.profile,
+        None,
+        &base.profiles,
+    );
     let Some(model_override) = prompt_model(&model_default, base.model_override.as_deref()).await?
     else {
         println!("  {DIM}Setup cancelled.{RESET}");
@@ -157,8 +161,10 @@ async fn prompt_backend(default: BackendName) -> Result<Option<BackendName>> {
             .position(|b| *b == default)
             .map(|i| i + 1)
             .unwrap_or(1);
-        let input =
-            plain_read_line(format!("  {CYAN}❯{RESET} {DIM}Select backend [{default_idx}]:{RESET} ")).await?;
+        let input = plain_read_line(format!(
+            "  {CYAN}❯{RESET} {DIM}Select backend [{default_idx}]:{RESET} "
+        ))
+        .await?;
         let trimmed = input.trim().to_lowercase();
         if is_cancel(&trimmed) {
             return Ok(None);
@@ -283,8 +289,10 @@ async fn prompt_approval(default: ApprovalPolicy) -> Result<Option<ApprovalPolic
             .position(|p| *p == default)
             .map(|i| i + 1)
             .unwrap_or(1);
-        let input =
-            plain_read_line(format!("  {CYAN}❯{RESET} {DIM}Select approval [{default_idx}]:{RESET} ")).await?;
+        let input = plain_read_line(format!(
+            "  {CYAN}❯{RESET} {DIM}Select approval [{default_idx}]:{RESET} "
+        ))
+        .await?;
         let trimmed = input.trim().to_lowercase();
         if is_cancel(&trimmed) {
             return Ok(None);
@@ -325,8 +333,10 @@ async fn prompt_tool_selection(default: ToolSelection) -> Result<Option<ToolSele
             .position(|s| *s == default)
             .map(|i| i + 1)
             .unwrap_or(1);
-        let input =
-            plain_read_line(format!("  {CYAN}❯{RESET} {DIM}Select tool mode [{default_idx}]:{RESET} ")).await?;
+        let input = plain_read_line(format!(
+            "  {CYAN}❯{RESET} {DIM}Select tool mode [{default_idx}]:{RESET} "
+        ))
+        .await?;
         let trimmed = input.trim().to_lowercase();
         if is_cancel(&trimmed) {
             return Ok(None);

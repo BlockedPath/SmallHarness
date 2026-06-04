@@ -6,7 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.4.4] - 2026-06-03
+## [0.4.5] - 2026-06-03
+
+### Fixed
+
+- **Response text no longer overflows the panel.** Streamed assistant text is
+  now word-wrapped to the panel's inner width (preserving paragraph breaks and
+  list/code indentation, hard-breaking overlong URLs) instead of running to the
+  full terminal width and spilling past the panel's right edge on wide
+  terminals.
+- The bordered input no longer erases its own bottom border on submit, so the
+  `you` box stays a closed panel.
 
 ### Added
 

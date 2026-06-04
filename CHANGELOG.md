@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-06-04
+
+### Changed
+
+- **Removed the hardware-profile concept** (`mac-mini-16gb` / `mac-studio-32gb`).
+  Each backend now has one sensible default model — override with `/model`,
+  `AGENT_MODEL`, or `modelOverride`. The `/profile` command, the `profile`/
+  `profiles` config fields, the `PROFILE` env var, and the banner profile line
+  are gone. Existing configs with a `profile` key still load (it's ignored);
+  model recommendation under `/doctor` still works off detected hardware.
+
 ## [0.4.6] - 2026-06-04
 
 ### Changed

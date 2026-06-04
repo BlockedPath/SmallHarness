@@ -150,6 +150,129 @@ fn summarize_output(output: &str) -> String {
     trunc(first_line, 60)
 }
 
+/// Incremental word-wrapper for streamed assistant text.
+///
+/// Wraps to `inner` visible columns, preserves hard newlines and a logical
+/// line's leading indentation (so lists and code keep their shape), and
+/// re-emits `gutter` after every line break so the answer stays aligned under
+/// the panel. `feed` returns the exact text to write for a streamed chunk;
+/// `finish` flushes the trailing buffered word. State persists across chunks,
+/// so it wraps correctly even when words arrive split across deltas.
+struct StreamWrap {
+    inner: usize,
+    gutter: String,
+    col: usize,
+    indent: usize,
+    word: String,
+    at_line_start: bool,
+    need_space: bool,
+}
+
+impl StreamWrap {
+    fn new(inner: usize, gutter: impl Into<String>) -> Self {
+        Self {
+            inner: inner.max(8),
+            gutter: gutter.into(),
+            col: 0,
+            indent: 0,
+            word: String::new(),
+            at_line_start: true,
+            need_space: false,
+        }
+    }
+
+    fn line_break(&mut self, out: &mut String, hard: bool) {
+        out.push('\n');
+        out.push_str(&self.gutter);
+        self.col = 0;
+        self.need_space = false;
+        if hard {
+            self.indent = 0;
+            self.at_line_start = true;
+        }
+    }
+
+    fn flush_word(&mut self, out: &mut String) {
+        if self.word.is_empty() {
+            return;
+        }
+        let word = std::mem::take(&mut self.word);
+        let wlen = word.chars().count();
+
+        // A single token longer than the line (e.g. a URL): hard-break it.
+        if wlen > self.inner {
+            if self.need_space && self.col > self.indent && self.col < self.inner {
+                out.push(' ');
+                self.col += 1;
+            }
+            for ch in word.chars() {
+                if self.col >= self.inner {
+                    self.line_break(out, false);
+                    for _ in 0..self.indent {
+                        out.push(' ');
+                    }
+                    self.col = self.indent;
+                }
+                out.push(ch);
+                self.col += 1;
+            }
+            self.need_space = false;
+            return;
+        }
+
+        let sep = usize::from(self.need_space && self.col > self.indent);
+        if self.col + sep + wlen > self.inner {
+            self.line_break(out, false);
+            for _ in 0..self.indent {
+                out.push(' ');
+            }
+            self.col = self.indent;
+        } else if sep == 1 {
+            out.push(' ');
+            self.col += 1;
+        }
+        out.push_str(&word);
+        self.col += wlen;
+        self.need_space = false;
+    }
+
+    fn feed(&mut self, s: &str) -> String {
+        let mut out = String::new();
+        for ch in s.chars() {
+            match ch {
+                '\n' => {
+                    self.flush_word(&mut out);
+                    self.line_break(&mut out, true);
+                }
+                ' ' | '\t' => {
+                    if self.at_line_start {
+                        // Preserve a logical line's leading indentation.
+                        if self.col < self.inner {
+                            out.push(' ');
+                            self.col += 1;
+                            self.indent = self.col;
+                        }
+                    } else {
+                        self.flush_word(&mut out);
+                        self.need_space = true;
+                    }
+                }
+                _ => {
+                    self.at_line_start = false;
+                    self.word.push(ch);
+                }
+            }
+        }
+        out
+    }
+
+    fn finish(&mut self) -> String {
+        let mut out = String::new();
+        self.flush_word(&mut out);
+        out
+    }
+}
+
 struct PendingCall {
     name: String,
     call_id: String,
@@ -168,9 +291,10 @@ pub struct TuiRenderer {
     /// current burst of reasoning deltas? Reset at end_turn so each turn
     /// gets its own header.
     reasoning_header_shown: bool,
-    /// True while the assistant's answer panel (`╭─ response … ╰─`) is open and
-    /// streaming. Closed when a tool call/reasoning interrupts or the turn ends.
-    answer_open: bool,
+    /// `Some` while the assistant's answer panel (`╭─ response … ╰─`) is open
+    /// and streaming. Holds the word-wrap state so content stays inside the
+    /// panel. Closed when a tool call/reasoning interrupts or the turn ends.
+    answer_wrap: Option<StreamWrap>,
 }
 
 impl TuiRenderer {
@@ -183,7 +307,7 @@ impl TuiRenderer {
             grouped_category: String::new(),
             minimal_batch: BTreeMap::new(),
             reasoning_header_shown: false,
-            answer_open: false,
+            answer_wrap: None,
         }
     }
 
@@ -240,17 +364,18 @@ impl TuiRenderer {
         self.reasoning_header_shown = false;
     }
 
-    /// Open the assistant answer panel on first text, gutter the streamed
-    /// content, and close it with a matching rounded footer.
+    /// Close the assistant answer panel: flush the last buffered word, then
+    /// print the rounded footer. No-op if no panel is open.
     fn end_answer(&mut self) {
-        if !self.answer_open {
+        let Some(mut wrap) = self.answer_wrap.take() else {
             return;
-        }
+        };
         let mut out = std::io::stdout();
+        let tail = wrap.finish();
+        let _ = write!(out, "{tail}");
         let _ = writeln!(out, "{RESET}");
         let _ = writeln!(out, "{}", panel_bottom());
         let _ = out.flush();
-        self.answer_open = false;
     }
 
     /// Close out the reasoning panel before switching to other output (text,
@@ -281,15 +406,20 @@ impl TuiRenderer {
             self.reasoning_header_shown = false;
         }
         let mut out = std::io::stdout();
-        if !self.answer_open {
+        if self.answer_wrap.is_none() {
             let _ = writeln!(out);
             let _ = writeln!(out, "{}", panel_top("response"));
             let _ = write!(out, "{PAD}{TEXT}");
-            self.answer_open = true;
+            // Wrap content to the panel's inner width: terminal width minus the
+            // 2-col gutter and a 2-col right margin so lines stop before the
+            // panel's right edge instead of overflowing.
+            let inner = crate::theme::width().saturating_sub(4).max(20);
+            self.answer_wrap = Some(StreamWrap::new(inner, PAD));
         }
-        // Keep every wrapped line aligned to the transcript's gutter.
-        let guttered = delta.replace('\n', &format!("\n{PAD}"));
-        let _ = write!(out, "{guttered}");
+        if let Some(wrap) = self.answer_wrap.as_mut() {
+            let chunk = wrap.feed(delta);
+            let _ = write!(out, "{chunk}");
+        }
         let _ = out.flush();
     }
 
@@ -469,5 +599,88 @@ impl TuiRenderer {
             .collect();
         println!("  {GRAY}{}{RESET}", parts.join(", "));
         self.minimal_batch.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamWrap;
+
+    /// Feed `text` through the wrapper one char at a time (worst case for an
+    /// incremental wrapper) and return the visible lines, gutter stripped.
+    fn wrapped_lines(text: &str, inner: usize) -> Vec<String> {
+        let mut w = StreamWrap::new(inner, "");
+        let mut out = String::new();
+        for ch in text.chars() {
+            out.push_str(&w.feed(&ch.to_string()));
+        }
+        out.push_str(&w.finish());
+        out.split('\n').map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_line_exceeds_inner_width() {
+        let text = "Absolutely! To get started, we need to set up a basic Python API. \
+                    A common approach is to use Flask, a lightweight framework for building APIs.";
+        for inner in [20usize, 40, 72] {
+            for line in wrapped_lines(text, inner) {
+                assert!(
+                    line.chars().count() <= inner,
+                    "line {:?} exceeds inner={inner}",
+                    line
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wraps_at_word_boundaries_not_mid_word() {
+        let lines = wrapped_lines("alpha beta gamma delta", 11);
+        // Greedy wrap at width 11: "alpha beta" (10) then "gamma delta" (11).
+        assert_eq!(
+            lines,
+            vec!["alpha beta".to_string(), "gamma delta".to_string()]
+        );
+    }
+
+    #[test]
+    fn preserves_hard_newlines() {
+        let lines = wrapped_lines("one\ntwo\nthree", 80);
+        assert_eq!(lines, vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn preserves_leading_indentation_with_hanging_indent() {
+        // A list item whose text wraps should keep its 4-space indent on the
+        // continuation line.
+        let lines = wrapped_lines("    1. install the dependency now", 16);
+        assert_eq!(lines[0], "    1. install");
+        assert!(
+            lines[1].starts_with("    "),
+            "continuation kept indent: {:?}",
+            lines[1]
+        );
+        assert!(lines.iter().all(|l| l.chars().count() <= 16));
+    }
+
+    #[test]
+    fn hard_breaks_an_overlong_token() {
+        let url = "https://example.com/a/very/long/path/that/cannot/fit";
+        let lines = wrapped_lines(url, 20);
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|l| l.chars().count() <= 20));
+        // All characters survive the break.
+        assert_eq!(lines.concat(), url);
+    }
+
+    #[test]
+    fn splitting_a_word_across_feeds_still_wraps_correctly() {
+        // Same text, fed in two arbitrary chunks, must wrap identically.
+        let mut w = StreamWrap::new(11, "");
+        let mut out = String::new();
+        out.push_str(&w.feed("alpha be"));
+        out.push_str(&w.feed("ta gamma delta"));
+        out.push_str(&w.finish());
+        assert_eq!(out, "alpha beta\ngamma delta");
     }
 }

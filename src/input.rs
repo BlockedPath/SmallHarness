@@ -264,7 +264,11 @@ fn read_bordered(history: &[String]) -> Result<String> {
                         if chars.is_empty() {
                             write!(out, "\x1b[1A\x1b[2K\x1b[1A\x1b[2K\r")?;
                         } else {
-                            write!(out, "\x1b[1B\x1b[2K\r")?;
+                            // Keep the panel's bottom border (it's already on
+                            // screen one row down) and move past it, so the
+                            // submitted "you" box stays closed instead of
+                            // losing its bottom edge.
+                            write!(out, "\x1b[1B\r\n")?;
                         }
                         out.flush()?;
                         return Ok(chars.iter().collect());

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-06-04
+
+### Added
+
+- **`/verbose` mode** — a debug tool view. `/verbose on` prints every tool call
+  as `→ name` with its full arguments and the result as `← (duration)` with a
+  large preview, so you can see exactly what the agent is doing; `/verbose off`
+  restores the normal grouped view.
+
 ## [0.4.10] - 2026-06-04
 
 ### Changed

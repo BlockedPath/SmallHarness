@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-03
+
+### Fixed
+
+- `small-harness --version` and `--help` now print and exit immediately
+  instead of loading config and validating the backend — which previously
+  errored with "OPENROUTER_API_KEY is required when BACKEND=openrouter" when
+  no key was set. `--help` also gained a proper usage summary.
+
 ## [0.4.1] - 2026-06-03
 
 A UI and onboarding polish pass.

@@ -9,13 +9,15 @@ use crate::hardware::{detect_hardware_spec, save_hardware_summary};
 use crate::input::plain_read_line;
 use crate::openai::{build_http_client, chat_oneshot, list_models, ChatMessage, ChatRequest};
 
-const RESET: &str = "\x1b[0m";
-const DIM: &str = "\x1b[2m";
-const BOLD: &str = "\x1b[1m";
-const CYAN: &str = "\x1b[36m";
-const GREEN: &str = "\x1b[32m";
-const YELLOW: &str = "\x1b[33m";
-const RED: &str = "\x1b[31m";
+// Routed through the shared theme so the wizard matches the rest of the TUI
+// and secondary text is readable bright-black instead of ANSI faint.
+const RESET: &str = crate::theme::RESET;
+const DIM: &str = crate::theme::MUTED;
+const BOLD: &str = crate::theme::BOLD;
+const CYAN: &str = crate::theme::ACCENT;
+const GREEN: &str = crate::theme::SUCCESS;
+const YELLOW: &str = crate::theme::WARN;
+const RED: &str = crate::theme::ERROR;
 
 const CONFIG_PATH: &str = "agent.config.json";
 const NO_WIZARD_ENV: &str = "SMALL_HARNESS_NO_WIZARD";
@@ -47,10 +49,14 @@ pub async fn maybe_run_first_run_setup(base: &AgentConfig) -> Result<Option<Agen
 }
 
 pub async fn run_setup_wizard(base: &AgentConfig) -> Result<Option<AgentConfig>> {
-    println!("  {BOLD}Small Harness setup{RESET}");
+    let pad = crate::theme::PAD;
+    println!();
+    println!("{pad}{CYAN}{BOLD}Small Harness setup{RESET}");
+    println!("{}", crate::theme::rule());
     println!(
-        "  {DIM}Answer a few prompts and I'll write {CONFIG_PATH}. Blank keeps the shown choice; blank model uses the profile default. Type q to cancel.{RESET}"
+        "{pad}{DIM}A few quick questions — I'll write {CONFIG_PATH}. Press Enter to keep the\n{pad}shown default ({CYAN}*{RESET}{DIM}); type q to cancel.{RESET}"
     );
+    println!();
 
     let Some(chosen_backend) = prompt_backend(base.backend).await? else {
         println!("  {DIM}Setup cancelled.{RESET}");
@@ -136,7 +142,7 @@ fn setup_config_value(config: &AgentConfig) -> Value {
 
 async fn prompt_backend(default: BackendName) -> Result<Option<BackendName>> {
     loop {
-        println!("  {DIM}Backend{RESET}");
+        println!("  {BOLD}Backend{RESET}");
         for (idx, backend) in BackendName::all().iter().enumerate() {
             let marker = if *backend == default { " *" } else { "" };
             println!(
@@ -152,7 +158,7 @@ async fn prompt_backend(default: BackendName) -> Result<Option<BackendName>> {
             .map(|i| i + 1)
             .unwrap_or(1);
         let input =
-            plain_read_line(format!("  {DIM}Select backend [{default_idx}]:{RESET} ")).await?;
+            plain_read_line(format!("  {CYAN}❯{RESET} {DIM}Select backend [{default_idx}]:{RESET} ")).await?;
         let trimmed = input.trim().to_lowercase();
         if is_cancel(&trimmed) {
             return Ok(None);
@@ -200,9 +206,9 @@ async fn prompt_api_key(chosen: BackendName) -> Result<()> {
         return Ok(());
     }
 
-    println!("  {DIM}{provider} needs an API key.{RESET}");
+    println!("  {BOLD}API key{RESET}  {DIM}{provider} needs one.{RESET}");
     let key = plain_read_line(format!(
-        "  {DIM}Paste {provider} API key (visible while typing, blank to skip): {RESET}"
+        "  {CYAN}❯{RESET} {DIM}Paste {provider} API key (visible while typing, blank to skip): {RESET}"
     ))
     .await?
     .trim()
@@ -242,10 +248,11 @@ async fn prompt_model(
     default_model: &str,
     current_override: Option<&str>,
 ) -> Result<Option<Option<String>>> {
+    println!("  {BOLD}Model{RESET}");
     let prompt = if let Some(current) = current_override {
-        format!("  {DIM}Model override [current: {current}; blank: {default_model}]:{RESET} ")
+        format!("  {CYAN}❯{RESET} {DIM}Model override [current: {current}; blank: {default_model}]:{RESET} ")
     } else {
-        format!("  {DIM}Model override [blank: {default_model}]:{RESET} ")
+        format!("  {CYAN}❯{RESET} {DIM}Model override [blank: {default_model}]:{RESET} ")
     };
     let input = plain_read_line(prompt).await?;
     let trimmed = input.trim();
@@ -266,7 +273,7 @@ async fn prompt_approval(default: ApprovalPolicy) -> Result<Option<ApprovalPolic
         ApprovalPolicy::Never,
     ];
     loop {
-        println!("  {DIM}Approval policy{RESET}");
+        println!("  {BOLD}Approval policy{RESET}");
         for (idx, policy) in options.iter().enumerate() {
             let marker = if *policy == default { " *" } else { "" };
             println!("    {DIM}{}){RESET} {}{}", idx + 1, policy.as_str(), marker);
@@ -277,7 +284,7 @@ async fn prompt_approval(default: ApprovalPolicy) -> Result<Option<ApprovalPolic
             .map(|i| i + 1)
             .unwrap_or(1);
         let input =
-            plain_read_line(format!("  {DIM}Select approval [{default_idx}]:{RESET} ")).await?;
+            plain_read_line(format!("  {CYAN}❯{RESET} {DIM}Select approval [{default_idx}]:{RESET} ")).await?;
         let trimmed = input.trim().to_lowercase();
         if is_cancel(&trimmed) {
             return Ok(None);
@@ -303,7 +310,7 @@ async fn prompt_approval(default: ApprovalPolicy) -> Result<Option<ApprovalPolic
 async fn prompt_tool_selection(default: ToolSelection) -> Result<Option<ToolSelection>> {
     let options = [ToolSelection::Auto, ToolSelection::Fixed];
     loop {
-        println!("  {DIM}Tool mode{RESET}");
+        println!("  {BOLD}Tool mode{RESET}");
         for (idx, selection) in options.iter().enumerate() {
             let marker = if *selection == default { " *" } else { "" };
             println!(
@@ -319,7 +326,7 @@ async fn prompt_tool_selection(default: ToolSelection) -> Result<Option<ToolSele
             .map(|i| i + 1)
             .unwrap_or(1);
         let input =
-            plain_read_line(format!("  {DIM}Select tool mode [{default_idx}]:{RESET} ")).await?;
+            plain_read_line(format!("  {CYAN}❯{RESET} {DIM}Select tool mode [{default_idx}]:{RESET} ")).await?;
         let trimmed = input.trim().to_lowercase();
         if is_cancel(&trimmed) {
             return Ok(None);

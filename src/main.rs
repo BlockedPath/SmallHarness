@@ -570,7 +570,7 @@ async fn main() -> anyhow::Result<()> {
         }
         let _ = input_history.push(&input);
 
-        if trimmed == "exit" || trimmed == "quit" || trimmed == ".exit" {
+        if matches!(trimmed, "/exit" | "/quit" | "exit" | "quit" | ".exit") {
             if state.path_store.dirty {
                 let current = PathStore::capture_state(&state, &state.workspace_root())?;
                 let _ = state.path_store.flush_if_dirty(current);

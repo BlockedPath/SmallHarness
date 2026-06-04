@@ -37,7 +37,7 @@ pub fn print_banner(info: BannerInfo<'_>) {
     println!("{}", row("approval", info.approval));
     println!("{}", rule());
     println!(
-        "{PAD}{MUTED}/help{RESET} commands  {MUTED}·{RESET}  {MUTED}/backend /model{RESET} switch  {MUTED}·{RESET}  {MUTED}exit{RESET} quit"
+        "{PAD}{MUTED}/help{RESET} commands  {MUTED}·{RESET}  {MUTED}/backend /model{RESET} switch  {MUTED}·{RESET}  {MUTED}/exit{RESET} quit"
     );
     println!();
 }

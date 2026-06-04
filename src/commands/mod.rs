@@ -253,7 +253,14 @@ fn help() {
     for (n, d) in COMMANDS {
         println!("  {CYAN}{:<12}{RESET} {DIM}{}{RESET}", n, d);
     }
-    println!("  {CYAN}{:<12}{RESET} {DIM}Quit{RESET}", "exit");
+    println!(
+        "  {CYAN}{:<12}{RESET} {DIM}Quit Small Harness{RESET}",
+        "/exit"
+    );
+    println!(
+        "  {CYAN}{:<12}{RESET} {DIM}Quit (alias for /exit){RESET}",
+        "/quit"
+    );
 }
 
 async fn cmd_setup(state: &mut AppState) -> Result<()> {

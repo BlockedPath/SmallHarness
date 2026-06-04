@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-06-04
+
+### Added
+
+- `/exit` and `/quit` slash commands to leave a session, so quitting is
+  consistent with every other command. Bare `exit`/`quit` still work.
+
 ## [0.4.8] - 2026-06-04
 
 ### Changed

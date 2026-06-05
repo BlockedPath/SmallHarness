@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-06-05
+
+### Added
+
+- **Navigable slash-command completion menu.** Typing `/` now opens a dropdown
+  of matching commands with their descriptions beneath the prompt (the best
+  match also shown as dim ghost text). **↑/↓** select, **Tab** accepts (with a
+  trailing space), **→** accepts inline, **Esc** dismisses; **↑/↓** fall back to
+  history when the menu is closed. Upgrades the inline-only completion from
+  0.4.12.
+
 ## [0.4.12] - 2026-06-04
 
 ### Added

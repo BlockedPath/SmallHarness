@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-06-04
+
+### Added
+
+- **Inline tab-completion for slash commands.** Type `/` and the rest of the
+  best-matching command appears as dim ghost text; **Tab** accepts it (with a
+  trailing space), **Right** accepts it at end-of-line. Updates live as you
+  type and never interferes with mid-line editing.
+
 ## [0.4.11] - 2026-06-04
 
 ### Added

@@ -26,6 +26,10 @@ use crate::context_guard::{
     compact_session, context_status_lines, extract_conversation_summary, merge_system_prompt,
     CompactMethod, CompactSessionContext,
 };
+use crate::continuation::{
+    continuation_system_prompt, default_continuation_path, ensure_continuation_sections,
+    render_continuation_prompt, render_fallback_continuation,
+};
 use crate::fix_loop::{parse_fix_args, run_fix_loop};
 use crate::handoff::{
     collect_handoff_context, default_export_path as default_handoff_export_path,
@@ -34,8 +38,13 @@ use crate::handoff::{
 };
 use crate::hardware::{detect_hardware_spec, save_hardware_summary, HardwareSpec};
 use crate::input::plain_read_line;
+use crate::iterate_loop::{parse_iterate_args, run_iterate_loop};
 use crate::openai::{
     list_models, stream_chat, ChatMessage, ChatRequest, StreamOptions, ToolDef, ToolDefFunction,
+};
+use crate::planner::{
+    default_spec_path, ensure_spec_sections, planner_system_prompt, render_fallback_spec,
+    render_planner_prompt,
 };
 use crate::playground::{
     print_play_list, print_scorecard, restore_play_session, run_play_battle, run_play_fixture,
@@ -111,6 +120,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/handoff",
         "Draft commit, changelog, testing, and X-ready release copy",
     ),
+    (
+        "/plan",
+        "Expand a short intent into a product spec (.small-harness/spec.md)",
+    ),
     ("/session", "Show session info and token usage"),
     ("/sessions", "List saved sessions"),
     ("/resume", "Resume latest or named session"),
@@ -153,6 +166,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/compact", "Summarize or trim older conversation turns"),
     (
+        "/reset",
+        "Reset context: write a continuation handoff (.small-harness/continue.md) and start fresh",
+    ),
+    (
         "/doctor",
         "Probe backend/tools/env; subcommands: recommend, bench, models, autotune",
     ),
@@ -179,6 +196,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     (
         "/fix",
         "Fix-until-green loop on your repo (smart tests, --attempts, --yolo)",
+    ),
+    (
+        "/iterate",
+        "Generate→evaluate→improve loop on a goal (rubric-scored, --max, --threshold, --yolo)",
     ),
 ];
 
@@ -208,6 +229,7 @@ pub async fn dispatch(input: &str, state: &mut AppState) -> Result<()> {
         "/mode" => cmd_mode(&args, state),
         "/shipcheck" => cmd_shipcheck(&args, state)?,
         "/handoff" => cmd_handoff(&args, state).await?,
+        "/plan" => cmd_plan(&args, state).await?,
         "/session" => cmd_session(&args, state)?,
         "/sessions" => cmd_sessions(&args, state)?,
         "/resume" => cmd_resume(&args, state)?,
@@ -222,6 +244,7 @@ pub async fn dispatch(input: &str, state: &mut AppState) -> Result<()> {
         "/compare" => cmd_compare(&args, state).await?,
         "/context" => cmd_context(&args, state),
         "/compact" => cmd_compact(&args, state).await?,
+        "/reset" => cmd_reset(&args, state).await?,
         "/doctor" => cmd_doctor(&args, state).await?,
         "/index" => cmd_index(&args, state)?,
         "/map" => cmd_map(&args, state)?,
@@ -235,6 +258,7 @@ pub async fn dispatch(input: &str, state: &mut AppState) -> Result<()> {
         "/prompt" => cmd_prompt(&args, state).await?,
         "/play" => cmd_play(&args, state).await?,
         "/fix" => cmd_fix(&args, state).await?,
+        "/iterate" => cmd_iterate(&args, state).await?,
         // These model-tuning commands were folded into `/doctor` subcommands.
         "/bench" => redirect_to_doctor("/bench", "bench"),
         "/capabilities" => redirect_to_doctor("/capabilities", "models"),
@@ -901,6 +925,280 @@ async fn cmd_handoff(args: &str, state: &AppState) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+enum PlanInvocation {
+    Show,
+    Draft {
+        intent: String,
+        export_path: Option<PathBuf>,
+    },
+}
+
+/// Parse `/plan` arguments. Returns `None` to print usage.
+///   `/plan <intent>`                 → draft to `.small-harness/spec.md`
+///   `/plan <intent> --export <path>` → draft to `<path>` instead
+///   `/plan show`                     → print the saved spec
+fn parse_plan_args(args: &str) -> Option<PlanInvocation> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed == "show" {
+        return Some(PlanInvocation::Show);
+    }
+
+    let mut export_path: Option<PathBuf> = None;
+    let mut intent_parts: Vec<&str> = Vec::new();
+    let mut parts = trimmed.split_whitespace();
+    while let Some(part) = parts.next() {
+        if part == "--export" {
+            export_path = Some(PathBuf::from(parts.next()?));
+        } else if let Some(value) = part.strip_prefix("--export=") {
+            if value.is_empty() {
+                return None;
+            }
+            export_path = Some(PathBuf::from(value));
+        } else {
+            intent_parts.push(part);
+        }
+    }
+
+    let intent = intent_parts.join(" ");
+    if intent.trim().is_empty() {
+        return None;
+    }
+    Some(PlanInvocation::Draft {
+        intent,
+        export_path,
+    })
+}
+
+async fn cmd_plan(args: &str, state: &AppState) -> Result<()> {
+    let Some(invocation) = parse_plan_args(args) else {
+        println!(
+            "  {DIM}Usage: /plan <intent>  ·  /plan <intent> --export <path>  ·  /plan show{RESET}"
+        );
+        return Ok(());
+    };
+
+    let default_path = default_spec_path(&state.config.workspace_root);
+
+    let (intent, export_path) = match invocation {
+        PlanInvocation::Show => {
+            match fs::read_to_string(&default_path) {
+                Ok(content) => {
+                    println!();
+                    print!("{content}");
+                }
+                Err(_) => println!(
+                    "  {DIM}No spec yet at {} — run /plan <intent> to create one.{RESET}",
+                    default_path.display()
+                ),
+            }
+            return Ok(());
+        }
+        PlanInvocation::Draft {
+            intent,
+            export_path,
+        } => (intent, export_path),
+    };
+
+    println!(
+        "  {DIM}expanding spec with {} · {}{RESET}",
+        state.config.backend.as_str(),
+        state.model
+    );
+
+    let messages = vec![
+        ChatMessage::System {
+            content: planner_system_prompt(),
+        },
+        ChatMessage::User {
+            content: render_planner_prompt(&intent).into(),
+        },
+    ];
+    let req = ChatRequest {
+        model: &state.model,
+        messages: &messages,
+        tools: None,
+        stream: true,
+        stream_options: Some(StreamOptions {
+            include_usage: false,
+        }),
+        max_tokens: Some(1500),
+    };
+    let mut draft = String::new();
+    let result = stream_chat(&state.http, &state.backend, &req, None, |chunk| {
+        if let Some(choice) = chunk.choices.first() {
+            if let Some(content) = &choice.delta.content {
+                draft.push_str(content);
+            }
+        }
+    })
+    .await;
+
+    let body = match result {
+        Ok(_) if !draft.trim().is_empty() => ensure_spec_sections(&draft),
+        Ok(_) => render_fallback_spec(&intent, Some("empty model response")),
+        Err(e) => render_fallback_spec(&intent, Some(&e.to_string())),
+    };
+
+    println!();
+    print!("{body}");
+
+    let out_path = export_path.unwrap_or(default_path);
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&out_path, body)?;
+    println!(
+        "  {GREEN}✓{RESET} {DIM}spec saved →{RESET} {}",
+        out_path.display()
+    );
+
+    Ok(())
+}
+
+struct ResetArgs {
+    dry_run: bool,
+    allow_cloud: bool,
+}
+
+fn parse_reset_args(args: &str) -> Option<ResetArgs> {
+    let mut dry_run = false;
+    let mut allow_cloud = false;
+    for part in args.split_whitespace() {
+        match part {
+            "--dry-run" => dry_run = true,
+            "--cloud" => allow_cloud = true,
+            _ => return None,
+        }
+    }
+    Some(ResetArgs {
+        dry_run,
+        allow_cloud,
+    })
+}
+
+/// Reset the context window the article's way: draft a continuation artifact,
+/// write it to `.small-harness/continue.md`, then start a fresh session seeded
+/// with only that artifact. Unlike `/compact` (in-place summary, same session),
+/// this is a clean slate carrying an explicit handoff.
+async fn cmd_reset(args: &str, state: &mut AppState) -> Result<()> {
+    let Some(args) = parse_reset_args(args) else {
+        println!("  {DIM}Usage: /reset [--dry-run] [--cloud]{RESET}");
+        return Ok(());
+    };
+
+    // Nothing to hand off if there's no real conversation yet.
+    let has_conversation = state
+        .messages
+        .iter()
+        .any(|m| !matches!(m, ChatMessage::System { .. }));
+    if !has_conversation {
+        println!("  {DIM}Nothing to reset: the conversation is empty.{RESET}");
+        return Ok(());
+    }
+
+    if should_refuse_cloud_handoff(state.backend.name, args.allow_cloud) {
+        println!(
+            "  {RED}✗{RESET} {DIM}/reset will not send the conversation to a cloud backend unless you pass --cloud.{RESET}"
+        );
+        return Ok(());
+    }
+
+    println!(
+        "  {DIM}drafting continuation with {} · {}{RESET}",
+        state.config.backend.as_str(),
+        state.model
+    );
+
+    let messages = vec![
+        ChatMessage::System {
+            content: continuation_system_prompt(),
+        },
+        ChatMessage::User {
+            content: render_continuation_prompt(
+                &state.messages,
+                state.conversation_summary.as_deref(),
+            )
+            .into(),
+        },
+    ];
+    let req = ChatRequest {
+        model: &state.model,
+        messages: &messages,
+        tools: None,
+        stream: true,
+        stream_options: Some(StreamOptions {
+            include_usage: false,
+        }),
+        max_tokens: Some(1200),
+    };
+    let mut draft = String::new();
+    let result = stream_chat(&state.http, &state.backend, &req, None, |chunk| {
+        if let Some(choice) = chunk.choices.first() {
+            if let Some(content) = &choice.delta.content {
+                draft.push_str(content);
+            }
+        }
+    })
+    .await;
+
+    let body = match result {
+        Ok(_) if !draft.trim().is_empty() => ensure_continuation_sections(&draft),
+        Ok(_) => render_fallback_continuation(&state.messages, Some("empty model response")),
+        Err(e) => render_fallback_continuation(&state.messages, Some(&e.to_string())),
+    };
+
+    // Never tear down the session around an empty artifact.
+    if body.trim().is_empty() {
+        println!(
+            "  {RED}✗{RESET} {DIM}continuation came back empty — leaving the conversation intact.{RESET}"
+        );
+        return Ok(());
+    }
+
+    let out_path = default_continuation_path(&state.config.workspace_root);
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    fs::write(&out_path, &body)?;
+    println!();
+    print!("{body}");
+    println!(
+        "  {GREEN}✓{RESET} {DIM}continuation written →{RESET} {}",
+        out_path.display()
+    );
+
+    if args.dry_run {
+        println!("  {DIM}dry run — conversation left intact.{RESET}");
+        return Ok(());
+    }
+
+    // Clean slate (the exact /new recipe), then seed the new session with only
+    // the artifact so the next turn picks up from the handoff.
+    cmd_new(state);
+    let seed = ChatMessage::User {
+        content: format!(
+            "Continuing from a previous session. Here is the handoff state to resume from:\n\n{body}"
+        )
+        .into(),
+    };
+    state.messages.push(seed.clone());
+    // The session dir exists in normal runs (init_session_dir at startup), but
+    // ensure it before persisting the seed so a fresh path can't fail to write.
+    if let Some(parent) = state.session_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    save_message(&state.session_path, &seed)?;
+    println!("  {GREEN}✓{RESET} {DIM}new session seeded with continuation context{RESET}");
     Ok(())
 }
 
@@ -2263,6 +2561,200 @@ mod tests {
         assert!(body.contains("## X Post"));
         assert!(body.contains("## Testing"));
         assert!(body.contains("model draft failed"));
+    }
+
+    #[test]
+    fn parses_plan_args_variants() {
+        assert!(matches!(
+            parse_plan_args("show"),
+            Some(PlanInvocation::Show)
+        ));
+
+        let Some(PlanInvocation::Draft {
+            intent,
+            export_path,
+        }) = parse_plan_args("add a CSV export command")
+        else {
+            panic!("expected draft");
+        };
+        assert_eq!(intent, "add a CSV export command");
+        assert!(export_path.is_none());
+
+        let Some(PlanInvocation::Draft {
+            intent,
+            export_path,
+        }) = parse_plan_args("build a dashboard --export /tmp/out.md")
+        else {
+            panic!("expected draft");
+        };
+        assert_eq!(intent, "build a dashboard");
+        assert_eq!(export_path.as_deref(), Some(Path::new("/tmp/out.md")));
+
+        let Some(PlanInvocation::Draft { export_path, .. }) =
+            parse_plan_args("thing --export=/tmp/x.md")
+        else {
+            panic!("expected draft");
+        };
+        assert_eq!(export_path.as_deref(), Some(Path::new("/tmp/x.md")));
+
+        // Usage cases: empty, missing --export value, flags-only (no intent).
+        assert!(parse_plan_args("").is_none());
+        assert!(parse_plan_args("   ").is_none());
+        assert!(parse_plan_args("intent --export").is_none());
+        assert!(parse_plan_args("--export=/tmp/x.md").is_none());
+    }
+
+    #[tokio::test]
+    async fn plan_writes_fallback_spec_when_model_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_state(dir.path());
+        state.backend = BackendDescriptor {
+            name: BackendName::Ollama,
+            base_url: "http://127.0.0.1:1/v1".into(),
+            api_key: "test".into(),
+            is_local: true,
+        };
+
+        cmd_plan("add a CSV export command", &state).await.unwrap();
+
+        let body = fs::read_to_string(dir.path().join(".small-harness/spec.md")).unwrap();
+        for section in [
+            "## Goal",
+            "## User Outcomes",
+            "## Scope",
+            "## Out of Scope",
+            "## Done Criteria",
+            "## Open Questions",
+        ] {
+            assert!(body.contains(section), "missing {section}");
+        }
+        assert!(body.contains("add a CSV export command"));
+        assert!(body.contains("model draft failed"));
+    }
+
+    #[tokio::test]
+    async fn plan_export_overrides_default_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_state(dir.path());
+        state.backend = BackendDescriptor {
+            name: BackendName::Ollama,
+            base_url: "http://127.0.0.1:1/v1".into(),
+            api_key: "test".into(),
+            is_local: true,
+        };
+        let out_path = dir.path().join("nested/custom-spec.md");
+
+        cmd_plan(
+            &format!("build a dashboard --export {}", out_path.display()),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        assert!(out_path.exists());
+        // --export overrides the default destination, so spec.md is not written.
+        assert!(!dir.path().join(".small-harness/spec.md").exists());
+        assert!(fs::read_to_string(out_path)
+            .unwrap()
+            .contains("## Done Criteria"));
+    }
+
+    #[tokio::test]
+    async fn plan_show_without_spec_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        cmd_plan("show", &state).await.unwrap();
+        assert!(!dir.path().join(".small-harness/spec.md").exists());
+    }
+
+    #[test]
+    fn parse_reset_args_variants() {
+        assert!(parse_reset_args("").is_some());
+        let a = parse_reset_args("--dry-run --cloud").unwrap();
+        assert!(a.dry_run && a.allow_cloud);
+        assert!(parse_reset_args("--bogus").is_none());
+    }
+
+    fn dead_local_backend() -> BackendDescriptor {
+        BackendDescriptor {
+            name: BackendName::Ollama,
+            base_url: "http://127.0.0.1:1/v1".into(),
+            api_key: "test".into(),
+            is_local: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn reset_writes_artifact_and_seeds_new_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_state(dir.path());
+        state.backend = dead_local_backend();
+        state.messages.push(ChatMessage::User {
+            content: "make the parser robust".to_string().into(),
+        });
+        let old_path = state.session_path.clone();
+
+        cmd_reset("", &mut state).await.unwrap();
+
+        let body = fs::read_to_string(dir.path().join(".small-harness/continue.md")).unwrap();
+        for section in [
+            "## Done",
+            "## In Progress",
+            "## Key Decisions",
+            "## Next Steps",
+            "## Key Files",
+        ] {
+            assert!(body.contains(section), "missing {section}");
+        }
+        assert!(body.contains("make the parser robust"));
+        // New session: exactly the seed artifact, fresh session path.
+        assert_eq!(state.messages.len(), 1);
+        if let ChatMessage::User { content } = &state.messages[0] {
+            assert!(content.as_text().contains("handoff state"));
+        } else {
+            panic!("seed should be a user message");
+        }
+        assert_ne!(state.session_path, old_path);
+    }
+
+    #[tokio::test]
+    async fn reset_dry_run_keeps_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_state(dir.path());
+        state.backend = dead_local_backend();
+        state.messages.push(ChatMessage::User {
+            content: "x".to_string().into(),
+        });
+        let before = state.messages.len();
+        let old_path = state.session_path.clone();
+
+        cmd_reset("--dry-run", &mut state).await.unwrap();
+
+        assert!(dir.path().join(".small-harness/continue.md").exists());
+        assert_eq!(state.messages.len(), before);
+        assert_eq!(state.session_path, old_path);
+    }
+
+    #[tokio::test]
+    async fn reset_noops_on_empty_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_state(dir.path());
+        cmd_reset("", &mut state).await.unwrap();
+        assert!(!dir.path().join(".small-harness/continue.md").exists());
+        assert!(state.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reset_refuses_cloud_without_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = test_state(dir.path());
+        state.backend = backend(BackendName::Openrouter);
+        state.messages.push(ChatMessage::User {
+            content: "x".to_string().into(),
+        });
+        cmd_reset("", &mut state).await.unwrap();
+        assert!(!dir.path().join(".small-harness/continue.md").exists());
+        assert_eq!(state.messages.len(), 1);
     }
 
     #[test]

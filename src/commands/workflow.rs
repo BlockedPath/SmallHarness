@@ -106,6 +106,15 @@ pub(super) async fn cmd_fix(args: &str, state: &mut AppState) -> Result<()> {
     run_fix_loop(state, opts).await
 }
 
+pub(super) async fn cmd_iterate(args: &str, state: &mut AppState) -> Result<()> {
+    let opts = parse_iterate_args(
+        args,
+        state.config.iterate.max_iters,
+        state.config.rubric.pass_threshold,
+    )?;
+    run_iterate_loop(state, opts).await
+}
+
 pub(super) async fn cmd_eval(args: &str, state: &AppState) -> Result<()> {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.first() == Some(&"agent") {

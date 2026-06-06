@@ -7,6 +7,7 @@ use crate::backends::BackendName;
 pub const ALL_TOOL_NAMES: &[&str] = &[
     "apply_patch",
     "batch_edit",
+    "critique",
     "file_read",
     "file_write",
     "file_edit",
@@ -269,6 +270,81 @@ impl Default for FixConfig {
     }
 }
 
+/// Configures the `critique` evaluator and the rubric it grades against (#2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RubricConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Override path to the rubric markdown; defaults to
+    /// `<workspace>/.small-harness/rubric.md`.
+    #[serde(rename = "rubricPath", default)]
+    pub rubric_path: Option<String>,
+    /// Pass threshold on the 0-10 weighted scale.
+    #[serde(rename = "passThreshold", default = "default_pass_threshold")]
+    pub pass_threshold: f32,
+    /// Allow the critic to send workspace context to a cloud backend.
+    #[serde(rename = "allowCloud", default)]
+    pub allow_cloud: bool,
+    /// Let the critic actually run the project's tests (via the fixed-surface
+    /// `verify` tool) before scoring functionality, rather than reading only.
+    #[serde(rename = "liveVerify", default)]
+    pub live_verify: bool,
+    /// Timeout (seconds) for a single `verify` run; falls back to a bounded
+    /// default so a hung suite can't stall the loop.
+    #[serde(rename = "verifyTimeoutSecs", default)]
+    pub verify_timeout_secs: Option<u64>,
+}
+
+fn default_pass_threshold() -> f32 {
+    crate::rubric::DEFAULT_PASS_THRESHOLD
+}
+
+impl RubricConfig {
+    /// Bounded timeout for a `verify` run (default 10 minutes).
+    pub fn verify_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.verify_timeout_secs.unwrap_or(600))
+    }
+}
+
+impl Default for RubricConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            rubric_path: None,
+            pass_threshold: default_pass_threshold(),
+            allow_cloud: false,
+            live_verify: false,
+            verify_timeout_secs: None,
+        }
+    }
+}
+
+/// Configures the `/iterate` generate→evaluate loop (#3). The pass threshold is
+/// the rubric's `passThreshold`; only the iteration cap and the (optional)
+/// separate evaluator model live here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IterateConfig {
+    #[serde(rename = "maxIters", default = "default_iterate_max_iters")]
+    pub max_iters: usize,
+    /// Run the critic on a different model than the generator (stronger
+    /// generator/evaluator separation). `None` reuses the generator's model.
+    #[serde(rename = "evaluatorModel", default)]
+    pub evaluator_model: Option<String>,
+}
+
+fn default_iterate_max_iters() -> usize {
+    6
+}
+
+impl Default for IterateConfig {
+    fn default() -> Self {
+        Self {
+            max_iters: default_iterate_max_iters(),
+            evaluator_model: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathsConfig {
     #[serde(default = "default_true")]
@@ -431,6 +507,8 @@ pub struct AgentConfig {
     pub project_memory: ProjectMemoryConfig,
     pub checkpoints: CheckpointConfig,
     pub fix: FixConfig,
+    pub rubric: RubricConfig,
+    pub iterate: IterateConfig,
     pub paths: PathsConfig,
     pub mcp_servers: BTreeMap<String, crate::mcp::McpServerConfig>,
 }
@@ -505,6 +583,8 @@ impl Default for AgentConfig {
             project_memory: ProjectMemoryConfig::default(),
             checkpoints: CheckpointConfig::default(),
             fix: FixConfig::default(),
+            rubric: RubricConfig::default(),
+            iterate: IterateConfig::default(),
             paths: PathsConfig::default(),
             mcp_servers: BTreeMap::new(),
         }
@@ -541,6 +621,8 @@ struct FileConfig {
     project_memory: Option<ProjectMemoryConfig>,
     checkpoints: Option<CheckpointConfig>,
     fix: Option<FixConfig>,
+    rubric: Option<RubricConfig>,
+    iterate: Option<IterateConfig>,
     paths: Option<PathsConfig>,
     #[serde(rename = "mcpServers")]
     mcp_servers: Option<BTreeMap<String, crate::mcp::McpServerConfig>>,
@@ -770,6 +852,12 @@ pub fn load_config() -> AgentConfig {
                 }
                 if let Some(f) = file.fix {
                     config.fix = f;
+                }
+                if let Some(r) = file.rubric {
+                    config.rubric = r;
+                }
+                if let Some(i) = file.iterate {
+                    config.iterate = i;
                 }
                 if let Some(p) = file.paths {
                     config.paths = p;

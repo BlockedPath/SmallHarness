@@ -8,6 +8,7 @@ use crate::config::{AgentConfig, ApprovalPolicy, ToolSelection};
 mod apply_patch_tool;
 mod batch_edit;
 pub mod diff;
+mod evaluator;
 mod file_edit;
 mod file_read;
 mod file_write;
@@ -21,11 +22,13 @@ mod shell;
 mod ship_status;
 mod subagent;
 mod update_plan;
+mod verify;
 mod web_fetch;
 
 pub use apply_patch_tool::{patch_changed_files, ApplyPatchTool};
 pub use batch_edit::BatchEditTool;
 pub use diff::unified_diff;
+pub use evaluator::{run_evaluation, EvaluatorTool};
 pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
@@ -254,6 +257,20 @@ pub fn build_tools_for_names(config: &AgentConfig, names: &[String]) -> Vec<Arc<
             "web_fetch" => Some(Arc::new(WebFetchTool {
                 http: reqwest::Client::new(),
             })),
+            "critique" => {
+                // A separate critic agent, resolved like `task`. Its toolset is
+                // curated read-only (see EvaluatorTool), so it never mutates and
+                // never recurses into `task`/`critique`.
+                let backend = crate::backends::backend(config.backend);
+                let model =
+                    crate::backends::default_model(&backend, config.model_override.as_deref());
+                Some(Arc::new(EvaluatorTool {
+                    http: reqwest::Client::new(),
+                    backend,
+                    model,
+                    config: config.clone(),
+                }))
+            }
             _ => None,
         };
         if let Some(t) = t {

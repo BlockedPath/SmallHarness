@@ -46,6 +46,13 @@ few that aren't usual:
 - **Session paths.** `/path fork` branches the conversation and workspace so
   you can try two fixes, diff them, and `/path pick` the winner — no
   worktree required.
+- **Plan, then grade the work.** `/plan` expands a one-line intent into a
+  spec; `/iterate` runs a generate→evaluate loop where a *separate* critic
+  agent scores each pass against a rubric and feeds back until it clears the
+  bar — the generator never grades itself.
+- **Reset over compaction.** `/reset` writes a handoff artifact and starts a
+  clean session seeded with it — better coherence on long tasks than
+  summarizing in place.
 - **MCP-native.** Drop servers into `mcpServers` in your config; their tools
   show up as `mcp__<server>__<tool>` to the model on next launch.
 - **`/auth` instead of `.env`.** Paste API keys once into a `0600` file
@@ -178,6 +185,8 @@ A handful of moves worth knowing right away:
   `/path diff`, and `/path pick` compare and merge paths.
 - `/shipcheck` summarizes git state; `/handoff` drafts a commit message,
   changelog bullets, and a release post from local context.
+- `/plan <intent>` drafts a spec; `/iterate <goal>` runs a generate→evaluate
+  loop where a separate critic grades each pass against a rubric.
 - `/play fix-failing-test` runs a bundled demo in an isolated sandbox so you
   can try a real agent loop without touching your repo.
 - `Ctrl-J` for newline; `Enter` submits.
@@ -238,7 +247,7 @@ All model-tuning lives under `/doctor`:
 |-------|-------|
 | Read | `file_read`, `grep`, `list_dir`, `glob`, `repo_search` |
 | Mutate (approval-gated) | `file_write`, `file_edit`, `apply_patch`, `batch_edit`, `shell` |
-| Workflow | `run_tests`, `ship_status`, `web_fetch`, `update_plan`, `task` |
+| Workflow | `run_tests`, `ship_status`, `web_fetch`, `update_plan`, `task`, `critique` |
 | MCP | anything an MCP server exposes, surfaced as `mcp__<server>__<tool>` |
 
 The default `toolSelection: "auto"` keeps the full working pool available for
@@ -278,10 +287,12 @@ this exact call`. The session cache resets on `/new`.
 **Operator modes and workflow**
 ```
 /mode explore|edit|ship|review   switch operator preset
+/plan <intent>                   expand a short intent into a spec (.small-harness/spec.md)
 /shipcheck                       summarize git + test readiness
 /handoff                         draft commit, changelog, release copy
 /test discover|run|smart         discover or run tests
 /fix                             fix-until-green loop
+/iterate <goal>                  generate→evaluate→improve loop (rubric-scored)
 /batch / /refactor               coordinated multi-file edits
 /play fix-failing-test           bundled demo in an isolated sandbox
 ```
@@ -306,6 +317,7 @@ this exact call`. The session cache resets on `/new`.
 /forget <id|all>       remove notes
 /context               show prompt budget, model limit, auto-guard status
 /compact               summarize older turns (auto-runs at threshold)
+/reset                 write a continuation handoff and start a fresh session
 /doctor [--deep]       probe backend, tools, streaming, capabilities
 /doctor models         show cached per-model capability + benchmark records
 /doctor autotune       pick the best cached local model (add `apply` to switch)
@@ -360,6 +372,47 @@ The `/model` picker shows the same data while you choose:
 ---
 
 ## Going further
+
+### Plan a feature first
+
+`/plan <intent>` expands a one- or two-sentence intent into an ambitious spec
+— goal, user outcomes, scope, done criteria, open questions — and writes it to
+`.small-harness/spec.md`. It deliberately stays at the level of *what* and
+*why*, not implementation, so an early spec doesn't lock in the wrong details.
+`/plan show` prints the saved spec; `--export <path>` writes elsewhere.
+
+### Generate, evaluate, iterate
+
+`/iterate <goal>` runs a generate→evaluate→improve loop. After each attempt a
+**separate, read-only critic agent** (`critique`) scores the work 0–10 against
+a weighted rubric and hands back actionable feedback; the loop repeats —
+refining or pivoting — until the score clears the threshold or it runs out of
+rounds (`--max N`, default 6, capped at 15; `--threshold X`). The harness, not
+the model, computes the weighted total and pass/fail, so a critic that
+over-rates can't wave weak work through.
+
+The rubric defaults to quality / originality / craft / functionality and
+penalizes generic "AI slop"; override it with a `.small-harness/rubric.md`
+using `## Name (weight: N)` sections. Set `iterate.evaluatorModel` to grade
+with a *different* model than the generator — the cleanest version of the
+generator/evaluator split. Turn on `rubric.liveVerify` and the critic runs your
+test suite (via a fixed-surface `verify` tool — no arbitrary shell) before
+scoring functionality. The `critique` tool is also available on its own for a
+one-off, independent grade.
+
+Workspace context is never sent to a cloud backend for grading unless you set
+`rubric.allowCloud`.
+
+### Reset over compaction
+
+On a long task, `/reset` writes a structured handoff artifact — done, in
+progress, key decisions, next steps, key files — to
+`.small-harness/continue.md`, then starts a **fresh session seeded with only
+that artifact**. Unlike `/compact`, which summarizes in place, this is a clean
+context window carrying just what's needed to continue, which holds coherence
+better over long runs. `/reset --dry-run` writes the artifact without clearing;
+cloud backends require `--cloud`, since drafting the note sends the
+conversation to the model.
 
 ### Project-specific system prompt
 
@@ -479,6 +532,8 @@ root. Common shape:
     "allowCloudContext": false
   },
   "checkpoints": { "enabled": true, "maxTurns": 10 },
+  "rubric": { "enabled": true, "passThreshold": 7.0, "allowCloud": false, "liveVerify": false },
+  "iterate": { "maxIters": 6, "evaluatorModel": null },
   "paths": {
     "enabled": true,
     "maxPaths": 5,

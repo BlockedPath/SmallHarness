@@ -30,27 +30,16 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Cryptographically-secure random bytes from the OS CSPRNG.
+///
+/// PKCE verifiers and the OAuth `state` nonce MUST be unpredictable, so this
+/// pulls from the platform RNG via `getrandom` (which uses `/dev/urandom` on
+/// Unix, `BCryptGenRandom` on Windows, `getentropy` on macOS, etc.). A failing
+/// OS RNG is a fatal environment problem and unrecoverable here, so we panic
+/// rather than fall back to a weak, predictable seed.
 fn random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        if file.read_exact(&mut out).is_ok() {
-            return out;
-        }
-    }
-    // Very small fallback for unusual platforms where /dev/urandom is absent.
-    // OAuth state/PKCE should normally use the OS RNG path above.
-    let seed = format!(
-        "{}:{}:{}",
-        now_secs(),
-        std::process::id(),
-        std::thread::current().name().unwrap_or("small-harness")
-    );
-    let mut digest = Sha256::digest(seed.as_bytes()).to_vec();
-    while digest.len() < N {
-        let next = Sha256::digest(&digest);
-        digest.extend_from_slice(&next);
-    }
-    out.copy_from_slice(&digest[..N]);
+    getrandom::getrandom(&mut out).expect("OS CSPRNG (getrandom) unavailable");
     out
 }
 

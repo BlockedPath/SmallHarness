@@ -19,6 +19,15 @@ pub const ALL_TOOL_NAMES: &[&str] = &[
     "shell",
     "ship_status",
     "web_fetch",
+    "xai_analyze_image",
+    "xai_code_execution",
+    "xai_critique",
+    "xai_deep_research",
+    "xai_generate_image",
+    "xai_generate_text",
+    "xai_multi_agent",
+    "xai_web_search",
+    "xai_x_search",
 ];
 
 pub fn is_tool_name(s: &str) -> bool {

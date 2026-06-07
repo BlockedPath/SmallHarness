@@ -24,6 +24,7 @@ mod subagent;
 mod update_plan;
 mod verify;
 mod web_fetch;
+mod xai;
 
 pub use apply_patch_tool::{patch_changed_files, ApplyPatchTool};
 pub use batch_edit::BatchEditTool;
@@ -43,6 +44,7 @@ pub use ship_status::ShipStatusTool;
 pub use subagent::SubagentTool;
 pub use update_plan::UpdatePlanTool;
 pub use web_fetch::WebFetchTool;
+pub use xai::{XaiTool, XaiToolKind};
 
 /// Base64-encode raw bytes for use in a data URL (e.g. `data:image/png;base64,...`).
 /// Re-exported from `file_read` so callers outside the tools module (like
@@ -257,6 +259,51 @@ pub fn build_tools_for_names(config: &AgentConfig, names: &[String]) -> Vec<Arc<
             "web_fetch" => Some(Arc::new(WebFetchTool {
                 http: reqwest::Client::new(),
             })),
+            "xai_generate_text" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::GenerateText,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_multi_agent" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::MultiAgent,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_web_search" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::WebSearch,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_x_search" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::XSearch,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_code_execution" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::CodeExecution,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_generate_image" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::GenerateImage,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_critique" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::Critique,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_analyze_image" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::AnalyzeImage,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
+            "xai_deep_research" => Some(Arc::new(XaiTool {
+                kind: XaiToolKind::DeepResearch,
+                http: reqwest::Client::new(),
+                path_policy: path_policy.clone(),
+            })),
             "critique" => {
                 // A separate critic agent, resolved like `task`. Its toolset is
                 // curated read-only (see EvaluatorTool), so it never mutates and
@@ -396,6 +443,38 @@ mod tests {
         for m in mutation_tool_names() {
             assert!(!is_read_only_tool(m), "{m} must not be read-only");
         }
+    }
+
+    #[test]
+    fn builds_xai_tool_suite() {
+        let config = AgentConfig::default();
+        let names = vec![
+            "xai_generate_text".to_string(),
+            "xai_multi_agent".to_string(),
+            "xai_web_search".to_string(),
+            "xai_x_search".to_string(),
+            "xai_code_execution".to_string(),
+            "xai_generate_image".to_string(),
+            "xai_critique".to_string(),
+            "xai_analyze_image".to_string(),
+            "xai_deep_research".to_string(),
+        ];
+        let tools = build_tools_for_names(&config, &names);
+        let built: Vec<&str> = tools.iter().map(|tool| tool.name()).collect();
+        assert_eq!(
+            built,
+            vec![
+                "xai_generate_text",
+                "xai_multi_agent",
+                "xai_web_search",
+                "xai_x_search",
+                "xai_code_execution",
+                "xai_generate_image",
+                "xai_critique",
+                "xai_analyze_image",
+                "xai_deep_research",
+            ]
+        );
     }
 
     #[test]

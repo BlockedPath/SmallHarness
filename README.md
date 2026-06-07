@@ -287,6 +287,7 @@ All model-tuning lives under `/doctor`:
 | Read | `file_read`, `grep`, `list_dir`, `glob`, `repo_search` |
 | Mutate (approval-gated) | `file_write`, `file_edit`, `apply_patch`, `batch_edit`, `shell` |
 | Workflow | `run_tests`, `ship_status`, `web_fetch`, `update_plan`, `task`, `critique` |
+| xAI / Grok (approval-gated cloud tools) | `xai_generate_text`, `xai_multi_agent`, `xai_web_search`, `xai_x_search`, `xai_code_execution`, `xai_generate_image`, `xai_critique`, `xai_analyze_image`, `xai_deep_research` |
 | MCP | anything an MCP server exposes, surfaced as `mcp__<server>__<tool>` |
 
 The default `toolSelection: "auto"` keeps the full working pool available for
@@ -294,6 +295,11 @@ any real request (so "build me a site" writes files instead of dumping code
 into the chat) and sends no tools only for plain greetings. `fixed` always
 sends the pool. Set the pool with `/tools file_read,grep,list_dir`, or
 persistently in `agent.config.json`.
+
+The `xai_*` tool suite uses `XAI_API_KEY` when present, otherwise the same
+Grok OAuth credential from `/login xai` / `~/.grok/auth.json`. These tools call
+xAI directly from inside the harness, including xAI's server-side built-ins
+(`web_search`, `x_search`, and `code_interpreter`) and the Imagine image API.
 
 ### Approval policies
 

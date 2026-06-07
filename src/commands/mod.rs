@@ -134,9 +134,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "/login",
-        "Browser/device-code login for subscription providers (openai-codex)",
+        "Browser/device-code login for subscription providers (openai-codex, xai)",
     ),
-    ("/logout", "Clear an OAuth login (openai-codex)"),
+    ("/logout", "Clear an OAuth login (openai-codex, xai)"),
     (
         "/image",
         "Attach an image to the next user prompt (vision-capable models only)",
@@ -151,7 +151,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "/backend",
-        "Switch backend (ollama, lm-studio, mlx, llamacpp, openrouter, openai, openai-codex)",
+        "Switch backend (ollama, lm-studio, mlx, llamacpp, openrouter, openai, openai-codex, xai)",
     ),
     (
         "/model",
@@ -1622,9 +1622,25 @@ async fn cmd_login(args: &str, state: &mut impl LoginState) -> Result<()> {
     } else {
         args.trim()
     };
+    if matches!(provider, "xai" | "x-ai" | "grok" | "xai-oauth" | "xai-auth") {
+        println!("  {BOLD}xAI / Grok login{RESET}");
+        println!("  {DIM}This uses your SuperGrok/Grok OAuth token, not XAI_API_KEY.{RESET}");
+        let result = crate::xai_oauth::login_and_save_browser(state.http()).await;
+        match result {
+            Ok(path) => {
+                println!(
+                    "  {GREEN}✓{RESET} {DIM}logged in to xai-oauth; saved to {}{RESET}",
+                    path.display()
+                );
+                state.after_login()?;
+            }
+            Err(e) => println!("  {RED}✗{RESET} {DIM}login failed: {e}{RESET}"),
+        }
+        return Ok(());
+    }
     if !matches!(provider, "openai-codex" | "codex" | "chatgpt") {
         println!(
-            "  {RED}✗{RESET} {DIM}unknown login provider: {provider} (try: openai-codex){RESET}"
+            "  {RED}✗{RESET} {DIM}unknown login provider: {provider} (try: openai-codex or xai){RESET}"
         );
         return Ok(());
     }
@@ -1664,7 +1680,10 @@ impl LoginState for AppState {
         &self.http
     }
     fn after_login(&mut self) -> Result<()> {
-        if matches!(self.config.backend, BackendName::OpenAiCodex) {
+        if matches!(
+            self.config.backend,
+            BackendName::OpenAiCodex | BackendName::Xai
+        ) {
             self.rebuild_client()?;
             self.resolve_model();
         }
@@ -1688,9 +1707,20 @@ fn cmd_logout(args: &str) -> Result<()> {
     } else {
         args.trim()
     };
+    if matches!(provider, "xai" | "x-ai" | "grok" | "xai-oauth" | "xai-auth") {
+        let mut store = crate::auth::AuthStore::load();
+        let cleared = store.clear(crate::xai_oauth::PROVIDER) | store.clear("xai-auth");
+        if cleared {
+            store.save()?;
+            println!("  {GREEN}✓{RESET} {DIM}cleared xai-oauth login{RESET}");
+        } else {
+            println!("  {DIM}no stored xai-oauth login{RESET}");
+        }
+        return Ok(());
+    }
     if !matches!(provider, "openai-codex" | "codex" | "chatgpt") {
         println!(
-            "  {RED}✗{RESET} {DIM}unknown logout provider: {provider} (try: openai-codex){RESET}"
+            "  {RED}✗{RESET} {DIM}unknown logout provider: {provider} (try: openai-codex or xai){RESET}"
         );
         return Ok(());
     }
@@ -1742,6 +1772,36 @@ fn print_auth_status() {
         println!(
             "  {:<12} {:<22}  {DIM}{}{RESET}",
             "openai-codex", "(not logged in)", "/login openai-codex"
+        );
+    }
+    if let Some(oauth) = store
+        .get_oauth(crate::xai_oauth::PROVIDER)
+        .or_else(|| store.get_oauth("xai-auth"))
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let status = if oauth.expires > now + 60 {
+            "oauth logged in"
+        } else if oauth.refresh.is_empty() {
+            "oauth token present"
+        } else {
+            "oauth refresh needed"
+        };
+        println!(
+            "  {:<12} {:<22}  {DIM}{}{RESET}",
+            "xai-oauth", status, "auth file"
+        );
+    } else if crate::xai_oauth::grok_cli_oauth_credentials().is_some() {
+        println!(
+            "  {:<12} {:<22}  {DIM}{}{RESET}",
+            "xai-oauth", "available", "~/.grok/auth.json"
+        );
+    } else {
+        println!(
+            "  {:<12} {:<22}  {DIM}{}{RESET}",
+            "xai-oauth", "(not logged in)", "/login xai"
         );
     }
     if let Some(path) = auth_file_path() {
@@ -1906,14 +1966,24 @@ async fn cmd_backend(args: &str, state: &mut AppState) -> Result<()> {
         );
         return Ok(());
     }
+    if matches!(chosen, BackendName::Xai)
+        && backend(chosen).api_key.is_empty()
+        && !crate::xai_oauth::has_oauth_credentials()
+    {
+        println!(
+            "  {RED}✗{RESET} {DIM}no xAI/Grok credentials. Set XAI_API_KEY or run /login xai.{RESET}"
+        );
+        return Ok(());
+    }
     if !chosen.is_local()
-        && !matches!(chosen, BackendName::OpenAiCodex)
+        && !matches!(chosen, BackendName::OpenAiCodex | BackendName::Xai)
         && backend(chosen).api_key.is_empty()
     {
         let env_name = match chosen {
             BackendName::Openrouter => "OPENROUTER_API_KEY",
             BackendName::OpenAi => "OPENAI_API_KEY",
             BackendName::OpenAiCodex => "ChatGPT login",
+            BackendName::Xai => "XAI_API_KEY or /login xai",
             _ => "API key",
         };
         println!("  {RED}✗{RESET} {DIM}{env_name} not set in environment.{RESET}");
@@ -1943,6 +2013,10 @@ async fn cmd_model(args: &str, state: &mut AppState) -> Result<()> {
                 return Ok(());
             };
             canonical.to_string()
+        } else if matches!(state.config.backend, BackendName::Xai) {
+            crate::xai_responses::canonical_xai_model(args)
+                .unwrap_or(args)
+                .to_string()
         } else {
             args.to_string()
         };

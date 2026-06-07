@@ -202,6 +202,9 @@ pub async fn list_models(
     if matches!(backend.name, BackendName::OpenAiCodex) {
         return Ok(crate::codex_responses::codex_model_list());
     }
+    if matches!(backend.name, BackendName::Xai) {
+        return Ok(crate::xai_responses::xai_model_list());
+    }
     let url = format!("{}/models", backend.base_url.trim_end_matches('/'));
     let resp = client.get(url).bearer_auth(&backend.api_key).send().await?;
     if !resp.status().is_success() {
@@ -226,6 +229,10 @@ pub async fn chat_oneshot(
 ) -> Result<()> {
     if matches!(backend.name, BackendName::OpenAiCodex) {
         return crate::codex_responses::stream_codex_responses(client, backend, req, None, |_| {})
+            .await;
+    }
+    if matches!(backend.name, BackendName::Xai) {
+        return crate::xai_responses::stream_xai_responses(client, backend, req, None, |_| {})
             .await;
     }
     let url = format!(
@@ -326,6 +333,10 @@ where
             client, backend, req, cancel, on_chunk,
         )
         .await;
+    }
+    if matches!(backend.name, BackendName::Xai) {
+        return crate::xai_responses::stream_xai_responses(client, backend, req, cancel, on_chunk)
+            .await;
     }
     let url = format!(
         "{}/chat/completions",

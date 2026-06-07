@@ -53,6 +53,7 @@ pub struct OAuthCredential {
 pub const KNOWN_PROVIDERS: &[(&str, &str)] = &[
     ("openai", "OPENAI_API_KEY"),
     ("openrouter", "OPENROUTER_API_KEY"),
+    ("xai", "XAI_API_KEY"),
 ];
 
 /// Returns the env var name that pairs with `provider`, if known.
@@ -216,12 +217,14 @@ mod tests {
         let names: Vec<&str> = KNOWN_PROVIDERS.iter().map(|(n, _)| *n).collect();
         assert!(names.contains(&"openai"));
         assert!(names.contains(&"openrouter"));
+        assert!(names.contains(&"xai"));
     }
 
     #[test]
     fn env_var_lookup_works_for_known_providers() {
         assert_eq!(env_var_for("openai"), Some("OPENAI_API_KEY"));
         assert_eq!(env_var_for("openrouter"), Some("OPENROUTER_API_KEY"));
+        assert_eq!(env_var_for("xai"), Some("XAI_API_KEY"));
         assert_eq!(env_var_for("not-a-provider"), None);
     }
 

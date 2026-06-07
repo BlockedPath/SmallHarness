@@ -20,7 +20,7 @@
   <a href="https://github.com/GetSmallAI/SmallHarness/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/GetSmallAI/SmallHarness/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.75%2B-dea584">
   <img alt="Version" src="https://img.shields.io/badge/version-0.4.13-111827">
-  <img alt="Backends" src="https://img.shields.io/badge/backends-Ollama%20%7C%20LM%20Studio%20%7C%20MLX%20%7C%20llama.cpp%20%7C%20OpenRouter%20%7C%20OpenAI-2563eb">
+  <img alt="Backends" src="https://img.shields.io/badge/backends-Ollama%20%7C%20LM%20Studio%20%7C%20MLX%20%7C%20llama.cpp%20%7C%20OpenRouter%20%7C%20OpenAI%20%7C%20Grok-2563eb">
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-optimized-111827">
   <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-111827">
 </p>
@@ -30,7 +30,7 @@
 ## What it is
 
 A coding agent that lives in your terminal. Bring your own **API key**
-(OpenAI or OpenRouter) or point it at a **local model** (Ollama, LM Studio,
+(OpenAI, OpenRouter, or xAI) or point it at a **local model** (Ollama, LM Studio,
 MLX, llama.cpp) — same tools, same commands, same session log either way. It
 ships with the usual tool kit — read, edit, grep, shell, run tests — plus a
 few that aren't usual:
@@ -100,12 +100,14 @@ Small Harness talks to **one backend at a time** — pick the path that fits.
 
 *Fastest to start, frontier-model quality, nothing to install locally.*
 
-1. Set your key — OpenAI **or** OpenRouter:
+1. Set your key — OpenAI, OpenRouter, **or** xAI:
 
    ```bash
    export OPENAI_API_KEY=sk-...
    # or
    export OPENROUTER_API_KEY=sk-or-...
+   # or
+   export XAI_API_KEY=xai-...
    ```
 
 2. Launch, then select the provider in the first-run wizard (or any time with
@@ -134,6 +136,22 @@ This is intentionally separate from `/auth set openai`: `openai` uses an
 `OPENAI_API_KEY` and the public OpenAI API, while `openai-codex` stores a
 refreshable ChatGPT OAuth token in `auth.json` and talks to the Codex Responses
 backend.
+
+### Path A3 — xAI / Grok OAuth login
+
+If you have SuperGrok/Grok OAuth access and want the same style of provider as
+`pi-xai-oauth`, log in inside the TUI:
+
+```text
+/login xai
+/backend xai
+```
+
+Small Harness also detects official Grok CLI credentials in
+`~/.grok/auth.json` and can import/use them. This is separate from
+`/auth set xai`: the API-key path uses `XAI_API_KEY`, while `/login xai`
+stores a refreshable OAuth token in `auth.json` and sends model traffic to the
+xAI Responses backend.
 
 ### Path B — Local model
 
@@ -220,12 +238,14 @@ A handful of moves worth knowing right away:
 | `openrouter` | `https://openrouter.ai/api/v1` | Cloud A/B with `/compare`; access to frontier models |
 | `openai` | `https://api.openai.com/v1` | Direct provider access with your own key |
 | `openai-codex` | `https://chatgpt.com/backend-api/codex/responses` | ChatGPT/Codex subscription OAuth via `/login openai-codex` |
+| `xai` | `https://api.x.ai/v1/responses` | Grok via `XAI_API_KEY`, `/auth set xai`, `/login xai`, or existing `~/.grok/auth.json` |
 
 Switch at runtime with `/backend <name>`. Endpoint overrides:
 `OLLAMA_BASE_URL`, `LM_STUDIO_BASE_URL`, `MLX_BASE_URL`, `LLAMACPP_BASE_URL`,
-`OPENAI_BASE_URL`, `OPENAI_CODEX_BASE_URL`. API backends require an API key
-(set via [`/auth`](#cost-and-credentials) or env var); `openai-codex` requires
-`/login openai-codex`.
+`OPENAI_BASE_URL`, `OPENAI_CODEX_BASE_URL`, `XAI_BASE_URL`. API backends require
+an API key (set via [`/auth`](#cost-and-credentials) or env var); `openai-codex`
+requires `/login openai-codex`, and `xai` can use either `XAI_API_KEY` or
+`/login xai`.
 
 ### Default model per backend
 
@@ -242,6 +262,7 @@ or `modelOverride` in your config.
 | `openrouter` | `qwen/qwen-2.5-coder-32b-instruct` |
 | `openai` | `gpt-4o-mini` |
 | `openai-codex` | `gpt-5.5` |
+| `xai` | `grok-4.3` |
 
 ### Recommend the right model for your box
 
@@ -322,7 +343,9 @@ this exact call`. The session cache resets on `/new`.
 /tools auto|fixed|<…>  show or set the active tool pool
 /auth                  manage API keys and OAuth credentials
 /login openai-codex    sign in with ChatGPT/Codex subscription OAuth
+/login xai             sign in with xAI/Grok OAuth (SuperGrok/Grok CLI)
 /logout openai-codex   clear the stored ChatGPT/Codex login
+/logout xai            clear the stored xAI/Grok login
 /image <path>          attach an image to the next user turn
 /reasoning on|off      toggle the streaming reasoning panel
 /verbose on|off        show every tool call with its full args + result
@@ -363,9 +386,12 @@ no change in behavior.
 /auth                    show what's configured (keys are masked)
 /auth set openai         paste your OpenAI key, save to file + this session
 /auth set openrouter     paste your OpenRouter key
+/auth set xai            paste your xAI API key
 /auth clear openai       remove from the file (env stays for this session)
 /login openai-codex      browser/device-code login with ChatGPT/Codex
+/login xai               browser login with xAI/Grok OAuth
 /logout openai-codex     remove the stored OAuth credential
+/logout xai              remove the stored xAI OAuth credential
 ```
 
 `openai-codex` is not an `OPENAI_API_KEY` replacement. It uses browser/device
@@ -373,10 +399,14 @@ OAuth, stores `{access, refresh, expires, accountId}` in the same `auth.json`,
 refreshes the access token before use, and sends model traffic to the Codex
 Responses backend.
 
+Likewise, `/login xai` is not an `XAI_API_KEY` replacement. It stores an
+`xai-oauth` credential (`{access, refresh, expires}`) in `auth.json` and talks
+to xAI's Responses backend; if `XAI_API_KEY` is set, the env var still wins.
+
 ### Per-turn and session cost
 
 When you're on a cloud backend with a model in the catalog (currently OpenAI's
-GPT-4o family, o-series, GPT-4, GPT-3.5), every turn prints its own cost
+GPT-4o family, o-series, GPT-4, GPT-3.5, plus Grok 4.3 / 4.2), every turn prints its own cost
 plus the running session total:
 
 ```text
@@ -513,13 +543,15 @@ Resolution order (later overrides earlier):
 ### Environment variables (the useful ones)
 
 ```bash
-BACKEND=ollama                                          # ollama|lm-studio|mlx|llamacpp|openrouter|openai|openai-codex
+BACKEND=ollama                                          # ollama|lm-studio|mlx|llamacpp|openrouter|openai|openai-codex|xai
 AGENT_MODEL=qwen2.5-coder:14b                           # overrides the backend default model
 
 OPENAI_API_KEY=sk-...                                   # required for openai
 OPENROUTER_API_KEY=sk-or-...                            # required for openrouter / /compare
+XAI_API_KEY=xai-...                                     # optional for xai (or use /login xai)
 OPENAI_BASE_URL=https://api.openai.com/v1               # point at a compatible proxy if needed
 OPENAI_CODEX_BASE_URL=https://chatgpt.com/backend-api    # override Codex backend base if needed
+XAI_BASE_URL=https://api.x.ai/v1                        # override xAI backend base if needed
 
 APPROVAL_POLICY=always                                  # always | dangerous-only | never
 AGENT_TOOLS=file_read,grep,list_dir,file_edit,file_write,shell,update_plan,task
@@ -620,6 +652,7 @@ runtime.
 - **OpenRouter** — set `OPENROUTER_API_KEY` (or use `/auth set openrouter`).
 - **OpenAI** — set `OPENAI_API_KEY` (or use `/auth set openai`). Use `OPENAI_BASE_URL` for a compatible proxy.
 - **OpenAI Codex** — run `/login openai-codex`, then `/backend openai-codex`.
+- **xAI / Grok** — set `XAI_API_KEY` (or use `/auth set xai`), or run `/login xai`; existing Grok CLI OAuth in `~/.grok/auth.json` is also supported.
 
 Run `/doctor --deep` for a fuller capability probe (streaming, usage chunks,
 native tool calls, inline JSON fallback). Reports land under `.sessions/doctor/`.

@@ -43,6 +43,8 @@ mod tools;
 mod turn_checkpoint;
 mod update_check;
 mod warmup;
+mod xai_oauth;
+mod xai_responses;
 
 use std::io::{IsTerminal, Read, Write};
 
@@ -348,6 +350,9 @@ async fn probe_backend(
                 crate::backends::BackendName::OpenAiCodex => {
                     "Run `/login openai-codex` to sign in with ChatGPT/Codex."
                 }
+                crate::backends::BackendName::Xai => {
+                    "Set XAI_API_KEY or run `/login xai` to sign in with xAI/Grok."
+                }
             };
             Err(format!("{e}. {hint}"))
         }
@@ -391,12 +396,21 @@ async fn main() -> anyhow::Result<()> {
         && crate::auth::AuthStore::load()
             .get_oauth("openai-codex")
             .is_none();
+    let missing_xai_login = matches!(config.backend, BackendName::Xai)
+        && backend_desc.api_key.is_empty()
+        && !crate::xai_oauth::has_oauth_credentials();
     if let Err(e) = validate(&backend_desc) {
-        if missing_codex_login {
+        if missing_codex_login || missing_xai_login {
             println!("  {YELLOW}!{RESET} {DIM}{e}{RESET}");
-            println!(
-                "  {DIM}Starting anyway so you can run /login openai-codex, or /backend to switch.{RESET}"
-            );
+            if missing_xai_login {
+                println!(
+                    "  {DIM}Starting anyway so you can run /login xai, set XAI_API_KEY, or /backend to switch.{RESET}"
+                );
+            } else {
+                println!(
+                    "  {DIM}Starting anyway so you can run /login openai-codex, or /backend to switch.{RESET}"
+                );
+            }
         } else {
             eprintln!("{e}");
             std::process::exit(1);
@@ -428,6 +442,8 @@ async fn main() -> anyhow::Result<()> {
     let mut warmed_fingerprint = None;
     let probe = if missing_codex_login {
         Err("Run /login openai-codex to sign in with ChatGPT/Codex.".to_string())
+    } else if missing_xai_login {
+        Err("Set XAI_API_KEY or run /login xai to sign in with xAI/Grok.".to_string())
     } else {
         probe_backend(&http, &backend_desc).await
     };

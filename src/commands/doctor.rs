@@ -69,11 +69,18 @@ async fn cmd_doctor_probe(args: &str, state: &AppState) -> Result<()> {
                 "  {RED}✗{RESET} {DIM}openai-codex login missing; run /login openai-codex{RESET}"
             );
         }
+    } else if matches!(state.config.backend, BackendName::Xai) {
+        if state.backend.api_key.is_empty() && !crate::xai_oauth::has_oauth_credentials() {
+            println!(
+                "  {RED}✗{RESET} {DIM}xAI/Grok credentials missing; set XAI_API_KEY or run /login xai{RESET}"
+            );
+        }
     } else if !state.config.backend.is_local() && state.backend.api_key.is_empty() {
         let env_name = match state.config.backend {
             BackendName::Openrouter => "OPENROUTER_API_KEY",
             BackendName::OpenAi => "OPENAI_API_KEY",
             BackendName::OpenAiCodex => "ChatGPT login",
+            BackendName::Xai => "XAI_API_KEY or /login xai",
             _ => "API key",
         };
         println!("  {RED}✗{RESET} {DIM}{env_name} missing{RESET}");
@@ -950,6 +957,7 @@ fn backend_model_hint(backend_name: BackendName, model: &str) -> String {
         BackendName::Openrouter => "set OPENROUTER_API_KEY before using OpenRouter".into(),
         BackendName::OpenAi => "set OPENAI_API_KEY before using OpenAI".into(),
         BackendName::OpenAiCodex => "run /login openai-codex before using ChatGPT/Codex".into(),
+        BackendName::Xai => "set XAI_API_KEY or run /login xai before using xAI/Grok".into(),
     }
 }
 

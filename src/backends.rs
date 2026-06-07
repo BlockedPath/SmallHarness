@@ -11,6 +11,7 @@ pub enum BackendName {
     Openrouter,
     OpenAi,
     OpenAiCodex,
+    Xai,
 }
 
 impl BackendName {
@@ -23,6 +24,7 @@ impl BackendName {
             BackendName::Openrouter => "openrouter",
             BackendName::OpenAi => "openai",
             BackendName::OpenAiCodex => "openai-codex",
+            BackendName::Xai => "xai",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -34,6 +36,7 @@ impl BackendName {
             "openrouter" => Some(Self::Openrouter),
             "openai" | "open-ai" => Some(Self::OpenAi),
             "openai-codex" | "open-ai-codex" | "codex" | "chatgpt" => Some(Self::OpenAiCodex),
+            "xai" | "x-ai" | "grok" | "xai-oauth" | "xai-auth" => Some(Self::Xai),
             _ => None,
         }
     }
@@ -46,6 +49,7 @@ impl BackendName {
             Self::Openrouter,
             Self::OpenAi,
             Self::OpenAiCodex,
+            Self::Xai,
         ]
     }
     /// True for backends that talk to a process on the user's machine, false
@@ -55,7 +59,7 @@ impl BackendName {
     pub fn is_local(&self) -> bool {
         match self {
             Self::Ollama | Self::LmStudio | Self::Mlx | Self::LlamaCpp => true,
-            Self::Openrouter | Self::OpenAi | Self::OpenAiCodex => false,
+            Self::Openrouter | Self::OpenAi | Self::OpenAiCodex | Self::Xai => false,
         }
     }
 }
@@ -123,6 +127,17 @@ pub fn backend(name: BackendName) -> BackendDescriptor {
             api_key: String::new(),
             is_local: false,
         },
+        BackendName::Xai => BackendDescriptor {
+            name,
+            base_url: std::env::var("XAI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.x.ai/v1".into()),
+            // Either XAI_API_KEY (API billing) or xAI OAuth (`/login xai`,
+            // SuperGrok/Grok CLI credentials) can authorize this backend.  The
+            // Responses adapter lazily loads/refreshes OAuth when the API key is
+            // absent.
+            api_key: std::env::var("XAI_API_KEY").unwrap_or_default(),
+            is_local: false,
+        },
     }
 }
 
@@ -137,6 +152,11 @@ pub fn default_model(b: &BackendDescriptor, override_: Option<&str>) -> String {
                 .unwrap_or("gpt-5.5")
                 .to_string();
         }
+        if matches!(b.name, BackendName::Xai) {
+            return crate::xai_responses::canonical_xai_model(m)
+                .unwrap_or(m)
+                .to_string();
+        }
         return m.to_string();
     }
     match b.name {
@@ -147,6 +167,7 @@ pub fn default_model(b: &BackendDescriptor, override_: Option<&str>) -> String {
         BackendName::Openrouter => "qwen/qwen-2.5-coder-32b-instruct",
         BackendName::OpenAi => "gpt-4o-mini",
         BackendName::OpenAiCodex => "gpt-5.5",
+        BackendName::Xai => "grok-4.3",
     }
     .to_string()
 }
@@ -167,6 +188,14 @@ pub fn validate(b: &BackendDescriptor) -> Result<()> {
     {
         return Err(anyhow!(
             "ChatGPT/Codex login is required when BACKEND=openai-codex. Run `/login openai-codex`."
+        ));
+    }
+    if matches!(b.name, BackendName::Xai)
+        && b.api_key.is_empty()
+        && !crate::xai_oauth::has_oauth_credentials()
+    {
+        return Err(anyhow!(
+            "xAI/Grok credentials are required when BACKEND=xai. Set XAI_API_KEY or run `/login xai`."
         ));
     }
     Ok(())
@@ -224,6 +253,7 @@ mod tests {
         assert!(!BackendName::Openrouter.is_local());
         assert!(!BackendName::OpenAi.is_local());
         assert!(!BackendName::OpenAiCodex.is_local());
+        assert!(!BackendName::Xai.is_local());
     }
 
     #[test]
@@ -276,5 +306,30 @@ mod tests {
         assert!(validate(&desc).is_err());
         desc.api_key = "sk-test".into();
         assert!(validate(&desc).is_ok());
+    }
+
+    #[test]
+    fn parses_xai_aliases() {
+        assert_eq!(BackendName::parse("xai"), Some(BackendName::Xai));
+        assert_eq!(BackendName::parse("grok"), Some(BackendName::Xai));
+        assert_eq!(BackendName::parse("xai-oauth"), Some(BackendName::Xai));
+        assert_eq!(BackendName::Xai.as_str(), "xai");
+    }
+
+    #[test]
+    fn lists_xai_as_switchable_backend() {
+        assert!(BackendName::all().contains(&BackendName::Xai));
+    }
+
+    #[test]
+    fn defaults_xai_to_grok_4_3() {
+        let model = default_model(&descriptor(BackendName::Xai), None);
+        assert_eq!(model, "grok-4.3");
+    }
+
+    #[test]
+    fn normalizes_xai_model_aliases() {
+        let model = default_model(&descriptor(BackendName::Xai), Some("grok"));
+        assert_eq!(model, "grok-4.3");
     }
 }

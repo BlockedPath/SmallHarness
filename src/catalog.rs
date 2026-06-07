@@ -82,9 +82,55 @@ const OPENAI_MODELS: &[ModelInfo] = &[
     },
 ];
 
+const XAI_MODELS: &[ModelInfo] = &[
+    ModelInfo {
+        id: "grok-4.3",
+        context_tokens: 1_000_000,
+        input_per_mtoken_usd: 1.25,
+        output_per_mtoken_usd: 2.50,
+        vision: true,
+    },
+    ModelInfo {
+        id: "grok-build",
+        context_tokens: 512_000,
+        input_per_mtoken_usd: 1.00,
+        output_per_mtoken_usd: 2.00,
+        vision: true,
+    },
+    ModelInfo {
+        id: "grok-composer-2.5-fast",
+        context_tokens: 200_000,
+        input_per_mtoken_usd: 3.00,
+        output_per_mtoken_usd: 15.00,
+        vision: true,
+    },
+    ModelInfo {
+        id: "grok-4.20-0309-reasoning",
+        context_tokens: 2_000_000,
+        input_per_mtoken_usd: 1.25,
+        output_per_mtoken_usd: 2.50,
+        vision: true,
+    },
+    ModelInfo {
+        id: "grok-4.20-0309-non-reasoning",
+        context_tokens: 2_000_000,
+        input_per_mtoken_usd: 1.25,
+        output_per_mtoken_usd: 2.50,
+        vision: true,
+    },
+    ModelInfo {
+        id: "grok-4.20-multi-agent-0309",
+        context_tokens: 2_000_000,
+        input_per_mtoken_usd: 1.25,
+        output_per_mtoken_usd: 2.50,
+        vision: true,
+    },
+];
+
 fn table_for(backend: BackendName) -> &'static [ModelInfo] {
     match backend {
         BackendName::OpenAi => OPENAI_MODELS,
+        BackendName::Xai => XAI_MODELS,
         // Local backends don't have meaningful $-per-token; OpenRouter
         // pricing varies per model and is best looked up live.
         _ => &[],
@@ -212,6 +258,14 @@ mod tests {
     #[test]
     fn openrouter_has_no_catalog() {
         assert!(lookup(BackendName::Openrouter, "qwen/qwen-2.5-coder-32b-instruct").is_none());
+    }
+
+    #[test]
+    fn xai_catalog_marks_grok_vision_and_cost() {
+        let info = lookup(BackendName::Xai, "grok-4.3").unwrap();
+        assert_eq!(info.context_tokens, 1_000_000);
+        assert_eq!(info.input_per_mtoken_usd, 1.25);
+        assert!(info.vision);
     }
 
     #[test]

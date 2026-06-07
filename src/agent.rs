@@ -75,6 +75,155 @@ pub fn to_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<ToolDef> {
         .collect()
 }
 
+fn cursor_tool_alias(name: &str) -> Option<&'static str> {
+    match name {
+        "Read" => Some("file_read"),
+        "Write" => Some("file_write"),
+        "StrReplace" | "Edit" => Some("file_edit"),
+        "LS" => Some("list_dir"),
+        "Grep" => Some("grep"),
+        "Glob" => Some("glob"),
+        "Shell" => Some("shell"),
+        _ => None,
+    }
+}
+
+fn canonical_tool_name(name: &str) -> &str {
+    cursor_tool_alias(name).unwrap_or(name)
+}
+
+fn first_string(args: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        args.get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+fn first_u64(args: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        let value = args.get(*key)?;
+        value
+            .as_u64()
+            .or_else(|| value.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+    })
+}
+
+fn first_bool(args: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|key| {
+        let value = args.get(*key)?;
+        value.as_bool().or_else(|| {
+            let normalized = value.as_str()?.trim().to_lowercase();
+            match normalized.as_str() {
+                "true" | "1" | "yes" | "y" => Some(true),
+                "false" | "0" | "no" | "n" => Some(false),
+                _ => None,
+            }
+        })
+    })
+}
+
+fn object_from_tool_args(value: Value) -> serde_json::Map<String, Value> {
+    match value {
+        Value::Object(map) => map,
+        Value::String(s) if !s.trim().is_empty() => {
+            let mut map = serde_json::Map::new();
+            map.insert("value".into(), Value::String(s));
+            map
+        }
+        _ => serde_json::Map::new(),
+    }
+}
+
+fn normalize_cursor_tool_args(original_name: &str, canonical_name: &str, args: Value) -> Value {
+    if original_name == canonical_name {
+        return args;
+    }
+    let params = object_from_tool_args(args);
+    let path = || {
+        first_string(
+            &params,
+            &[
+                "path",
+                "file_path",
+                "filePath",
+                "target_file",
+                "targetFile",
+                "value",
+            ],
+        )
+    };
+    match canonical_name {
+        "file_read" => serde_json::json!({
+            "path": path().unwrap_or_default(),
+            "offset": first_u64(&params, &["offset", "start_line", "startLine"]),
+            "limit": first_u64(&params, &["limit", "max_lines", "maxLines"]),
+        }),
+        "file_write" => serde_json::json!({
+            "path": path().unwrap_or_default(),
+            "content": first_string(&params, &["content", "contents", "text", "value"]).unwrap_or_default(),
+        }),
+        "file_edit" => {
+            let old_text = first_string(
+                &params,
+                &[
+                    "old_text",
+                    "oldText",
+                    "old_string",
+                    "oldString",
+                    "old",
+                    "target",
+                ],
+            )
+            .unwrap_or_default();
+            let new_text = first_string(
+                &params,
+                &[
+                    "new_text",
+                    "newText",
+                    "new_string",
+                    "newString",
+                    "new",
+                    "replacement",
+                ],
+            )
+            .unwrap_or_default();
+            serde_json::json!({
+                "path": path().unwrap_or_default(),
+                "edits": [{ "old_text": old_text, "new_text": new_text }],
+            })
+        }
+        "grep" => serde_json::json!({
+            "pattern": first_string(&params, &["pattern", "query", "regex", "substring", "value"]).unwrap_or_default(),
+            "path": first_string(&params, &["path", "directory", "dir", "folder", "file_path", "filePath"]),
+            "glob": first_string(&params, &["glob", "include", "glob_pattern", "globPattern", "glob_filter", "globFilter", "filter"]),
+            "ignoreCase": first_bool(&params, &["ignoreCase", "ignore_case", "case_insensitive", "caseInsensitive"]),
+        }),
+        "glob" => serde_json::json!({
+            "pattern": first_string(&params, &["pattern", "glob", "glob_pattern", "globPattern", "query", "value"]).unwrap_or_else(|| "**/*".into()),
+            "path": first_string(&params, &["path", "directory", "dir", "folder"]),
+        }),
+        "list_dir" => serde_json::json!({
+            "path": path(),
+        }),
+        "shell" => {
+            let mut timeout = first_u64(&params, &["timeout", "timeout_ms", "timeoutMs"]);
+            if let Some(t) = timeout.as_mut() {
+                if *t > 1000 {
+                    *t = (*t / 1000).max(1);
+                }
+            }
+            serde_json::json!({
+                "command": first_string(&params, &["command", "cmd", "value"]).unwrap_or_default(),
+                "timeout": timeout,
+            })
+        }
+        _ => Value::Object(params),
+    }
+}
+
 fn looks_like_start_of_tool_call(text: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
@@ -96,7 +245,8 @@ fn try_parse_inline_tool_call(text: &str, tool_names: &HashSet<String>) -> Optio
         return None;
     }
     let parsed: Value = serde_json::from_str(t).ok()?;
-    let name = parsed.get("name")?.as_str()?.to_string();
+    let raw_name = parsed.get("name")?.as_str()?.to_string();
+    let name = canonical_tool_name(&raw_name).to_string();
     if !tool_names.contains(&name) {
         return None;
     }
@@ -109,6 +259,7 @@ fn try_parse_inline_tool_call(text: &str, tool_names: &HashSet<String>) -> Optio
     if !args.is_object() {
         return None;
     }
+    let args = normalize_cursor_tool_args(&raw_name, &name, args);
     Some((name, args))
 }
 
@@ -343,20 +494,23 @@ where
         for tc in final_calls {
             let parsed_args: Value = serde_json::from_str(&tc.function.arguments)
                 .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+            let canonical_name = canonical_tool_name(&tc.function.name).to_string();
+            let normalized_args =
+                normalize_cursor_tool_args(&tc.function.name, &canonical_name, parsed_args.clone());
             on_event(AgentEvent::ToolCall {
                 name: tc.function.name.clone(),
                 call_id: tc.id.clone(),
-                args: parsed_args.clone(),
+                args: normalized_args.clone(),
             });
 
-            let entry = if let Some(tool) = tool_map.get(&tc.function.name) {
-                let needs_approval = tool.require_approval(&parsed_args);
+            let entry = if let Some(tool) = tool_map.get(&canonical_name) {
+                let needs_approval = tool.require_approval(&normalized_args);
                 let mut denied = false;
                 if needs_approval {
-                    let preview = tool.preview(&parsed_args).await;
+                    let preview = tool.preview(&normalized_args).await;
                     if let Some(provider) = approve.as_deref_mut() {
                         if !provider
-                            .approve(&tc.function.name, &parsed_args, preview.as_ref())
+                            .approve(&canonical_name, &normalized_args, preview.as_ref())
                             .await
                         {
                             denied = true;
@@ -373,16 +527,16 @@ where
                         .unwrap(),
                     )
                 } else {
-                    if is_mutation_tool(&tc.function.name) {
+                    if is_mutation_tool(&canonical_name) {
                         if let Some(c) = capturer.as_deref_mut() {
-                            c.snapshot_before_tool(&tc.function.name, &parsed_args)
+                            c.snapshot_before_tool(&canonical_name, &normalized_args)
                                 .await;
                         }
                     }
                     Pending::Run {
                         tool: tool.clone(),
-                        args: parsed_args,
-                        read_only: is_read_only_tool(&tc.function.name),
+                        args: normalized_args,
+                        read_only: is_read_only_tool(&canonical_name),
                     }
                 }
             } else {
@@ -605,6 +759,33 @@ mod tests {
         let n = names();
         let (_, args) = try_parse_inline_tool_call(r#"{"name":"shell"}"#, &n).unwrap();
         assert!(args.is_object());
+    }
+
+    #[test]
+    fn cursor_style_tool_aliases_canonicalize_names_and_args() {
+        assert_eq!(canonical_tool_name("Glob"), "glob");
+        assert_eq!(canonical_tool_name("Grep"), "grep");
+        assert_eq!(canonical_tool_name("Read"), "file_read");
+
+        let args = normalize_cursor_tool_args(
+            "Glob",
+            "glob",
+            serde_json::json!({ "glob_pattern": "src/**/*.rs", "directory": "src" }),
+        );
+        assert_eq!(args["pattern"].as_str(), Some("src/**/*.rs"));
+        assert_eq!(args["path"].as_str(), Some("src"));
+    }
+
+    #[test]
+    fn inline_cursor_style_tool_call_maps_to_canonical_tool() {
+        let n: HashSet<String> = ["glob"].iter().map(|s| s.to_string()).collect();
+        let (name, args) = try_parse_inline_tool_call(
+            r#"{"name":"Glob","arguments":{"glob_pattern":"**/*.rs"}}"#,
+            &n,
+        )
+        .unwrap();
+        assert_eq!(name, "glob");
+        assert_eq!(args["pattern"].as_str(), Some("**/*.rs"));
     }
 
     #[test]
